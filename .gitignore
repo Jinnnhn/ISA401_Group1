@@ -1,0 +1,8 @@
+node_modules/
+.npm-cache/
+dist/
+.env*
+!.env.example
+.idea/
+.vscode/
+*.log
