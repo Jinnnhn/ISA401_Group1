@@ -1,17 +1,27 @@
 <script setup lang="ts">
 import {computed,onMounted,onUnmounted,ref} from 'vue';
 import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {useLayout} from './store';
 import {clone,propose,type Furniture} from './layout';
 const store=useLayout();const host=ref<HTMLDivElement>();const error=ref('');const dragging=ref(false);
 const selected=computed(()=>store.items.find(f=>f.id===store.selected)!);
 let cleanup=()=>{};
+let resetView=()=>{};
 onMounted(()=>{
  const el=host.value!;let renderer:THREE.WebGLRenderer;
  try{renderer=new THREE.WebGLRenderer({antialias:true});}catch{error.value='无法启动 3D，请使用启用硬件加速的桌面浏览器。';return;}
  renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setClearColor(0xf1f3ef);renderer.shadowMap.enabled=true;el.appendChild(renderer.domElement);
  renderer.domElement.style.touchAction='none';
  const scene=new THREE.Scene();const camera=new THREE.PerspectiveCamera(39,1,.1,100);camera.position.set(7.5,9,9);camera.lookAt(0,0,0);
+ const controls=new OrbitControls(camera,renderer.domElement);
+ controls.mouseButtons={LEFT:null,MIDDLE:THREE.MOUSE.DOLLY,RIGHT:THREE.MOUSE.ROTATE};
+ controls.touches={ONE:null,TWO:null};
+ controls.enablePan=false;controls.enableDamping=false;
+ controls.minDistance=6;controls.maxDistance=22;
+ controls.minPolarAngle=Math.PI/12;controls.maxPolarAngle=Math.PI/2.4;
+ controls.saveState();
+ resetView=()=>{if(dragging.value)return;controls.reset();store.message='已恢复默认视角，家具布局不变。';};
  scene.add(new THREE.HemisphereLight(0xffffff,0xa1ad9d,2.6));const sun=new THREE.DirectionalLight(0xffffff,3);sun.position.set(3,8,4);sun.castShadow=true;sun.shadow.mapSize.set(1024,1024);scene.add(sun);
  const floor=new THREE.Mesh(new THREE.BoxGeometry(6,.12,5),new THREE.MeshStandardMaterial({color:0xe5ddcc}));floor.position.y=-.09;floor.receiveShadow=true;scene.add(floor);
  const grid=new THREE.GridHelper(6,24,0xc2bdaf,0xd7d0c0);grid.scale.z=5/6;grid.position.y=-.02;scene.add(grid);
@@ -26,15 +36,15 @@ onMounted(()=>{
  });
  const ray=new THREE.Raycaster();const pointer=new THREE.Vector2();const plane=new THREE.Plane(new THREE.Vector3(0,1,0),0);let snapshot:Furniture[]|null=null;let preview:ReturnType<typeof propose>|null=null;let active='';let offset=new THREE.Vector3();let pointerId=-1;
  function point(e:PointerEvent){const r=renderer.domElement.getBoundingClientRect();pointer.set((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1);ray.setFromCamera(pointer,camera);return ray.ray.intersectPlane(plane,new THREE.Vector3());}
- function down(e:PointerEvent){if(e.button!==0||dragging.value)return;const p=point(e);const hits=ray.intersectObjects([...objects.values()],true);const hit=hits.find(h=>!(h.object instanceof THREE.LineSegments));if(!hit||!p)return;let object:THREE.Object3D=hit.object;while(!object.userData.id&&object.parent)object=object.parent;active=object.userData.id;store.selected=active;const f=store.items.find(f=>f.id===active)!;if(f.locked){store.message=`${f.name}已锁定，请先解锁。`;active='';return;}snapshot=clone(store.items);preview=null;offset.set(f.x-p.x,0,f.z-p.z);pointerId=e.pointerId;dragging.value=true;renderer.domElement.setPointerCapture(e.pointerId);store.message='正在拖动 · Esc 取消整次操作';}
+ function down(e:PointerEvent){if(e.button!==0||dragging.value)return;const p=point(e);const hits=ray.intersectObjects([...objects.values()],true);const hit=hits.find(h=>!(h.object instanceof THREE.LineSegments));if(!hit||!p)return;let object:THREE.Object3D=hit.object;while(!object.userData.id&&object.parent)object=object.parent;active=object.userData.id;store.selected=active;const f=store.items.find(f=>f.id===active)!;if(f.locked){store.message=`${f.name}已锁定，请先解锁。`;active='';return;}snapshot=clone(store.items);preview=null;offset.set(f.x-p.x,0,f.z-p.z);pointerId=e.pointerId;controls.enabled=false;dragging.value=true;renderer.domElement.setPointerCapture(e.pointerId);store.message='正在拖动 · Esc 取消整次操作';}
  function move(e:PointerEvent){if(!snapshot||e.pointerId!==pointerId)return;const p=point(e);if(!p)return;preview=propose(snapshot,active,p.x+offset.x,p.z+offset.z);store.message=preview.message;}
- function finish(cancel=false){if(!snapshot)return;if(!cancel&&preview?.ok){store.commit(preview.items);store.message='摆放完成 · 撤销会恢复这次移动及让位。';}else store.message=cancel?'已取消，家具回到拖动前的位置。':preview?.message??'已选中家具。';snapshot=null;preview=null;active='';dragging.value=false;if(renderer.domElement.hasPointerCapture(pointerId))renderer.domElement.releasePointerCapture(pointerId);pointerId=-1;}
- function up(){finish();}function cancel(){finish(true);}function key(e:KeyboardEvent){if(e.key==='Escape')cancel();}
+ function finish(cancel=false){if(!snapshot)return;if(!cancel&&preview?.ok){store.commit(preview.items);store.message='摆放完成 · 撤销会恢复这次移动及让位。';}else store.message=cancel?'已取消，家具回到拖动前的位置。':preview?.message??'已选中家具。';snapshot=null;preview=null;active='';dragging.value=false;controls.enabled=true;if(renderer.domElement.hasPointerCapture(pointerId))renderer.domElement.releasePointerCapture(pointerId);pointerId=-1;}
+ function up(e:PointerEvent){if(e.button===0)finish();}function cancel(){finish(true);}function key(e:KeyboardEvent){if(e.key==='Escape')cancel();}
  renderer.domElement.addEventListener('pointerdown',down);renderer.domElement.addEventListener('pointermove',move);renderer.domElement.addEventListener('pointerup',up);renderer.domElement.addEventListener('pointercancel',cancel);renderer.domElement.addEventListener('lostpointercapture',cancel);window.addEventListener('keydown',key);window.addEventListener('blur',cancel);
  const resize=new ResizeObserver(()=>{const w=el.clientWidth,h=el.clientHeight;renderer.setSize(w,h);camera.aspect=w/h;camera.updateProjectionMatrix();});resize.observe(el);
  const reduced=matchMedia('(prefers-reduced-motion: reduce)');const clock=new THREE.Clock();let frame=0;
  function tick(){frame=requestAnimationFrame(tick);const dt=Math.min(clock.getDelta(),.05);const items=preview?.ok?preview.items:store.items;items.forEach(f=>{const object=objects.get(f.id)!;const t=reduced.matches?1:1-Math.exp(-18*dt);object.position.x=THREE.MathUtils.lerp(object.position.x,f.x,t);object.position.z=THREE.MathUtils.lerp(object.position.z,f.z,t);const line=outlines.get(f.id)!;line.visible=f.id===store.selected;(line.material as THREE.LineBasicMaterial).color.set(preview&&!preview.ok&&f.id===active?0xbf5041:0x2c7050);});renderer.render(scene,camera);}tick();
- cleanup=()=>{cancelAnimationFrame(frame);resize.disconnect();window.removeEventListener('keydown',key);window.removeEventListener('blur',cancel);renderer.domElement.removeEventListener('pointerdown',down);renderer.domElement.removeEventListener('pointermove',move);renderer.domElement.removeEventListener('pointerup',up);renderer.domElement.removeEventListener('pointercancel',cancel);renderer.domElement.removeEventListener('lostpointercapture',cancel);scene.traverse(o=>{if(o instanceof THREE.Mesh||o instanceof THREE.LineSegments){o.geometry.dispose();const materials=Array.isArray(o.material)?o.material:[o.material];materials.forEach(m=>m.dispose());}});renderer.dispose();renderer.domElement.remove();};
+ cleanup=()=>{cancelAnimationFrame(frame);resize.disconnect();controls.dispose();resetView=()=>{};window.removeEventListener('keydown',key);window.removeEventListener('blur',cancel);renderer.domElement.removeEventListener('pointerdown',down);renderer.domElement.removeEventListener('pointermove',move);renderer.domElement.removeEventListener('pointerup',up);renderer.domElement.removeEventListener('pointercancel',cancel);renderer.domElement.removeEventListener('lostpointercapture',cancel);scene.traverse(o=>{if(o instanceof THREE.Mesh||o instanceof THREE.LineSegments){o.geometry.dispose();const materials=Array.isArray(o.material)?o.material:[o.material];materials.forEach(m=>m.dispose());}});renderer.dispose();renderer.domElement.remove();};
 });onUnmounted(()=>cleanup());
 </script>
 <template>
@@ -42,7 +52,7 @@ onMounted(()=>{
   <header><div class="brand">S<span>SpaceMate</span></div><span class="tag">交互验证 01</span><span class="version">Vue 3 · 客厅原型</span></header>
   <section class="intro"><span class="eyebrow">让空间，顺着你的想法变化</span><h1>先摆一摆，再决定。</h1><p>拖动家具探索布局。靠近茶几时，它会为你的新想法让出位置。</p></section>
   <section class="workspace">
-   <div class="scene-panel"><div class="scene-top"><strong>客厅 <small>6 × 5 m</small></strong><span>固定视角 / 轻量 3D</span></div><div ref="host" class="canvas" aria-label="3D 客厅，用鼠标拖动家具"><p v-if="error" role="alert">{{error}}</p></div><div class="legend"><span><i></i>选中家具</span><span>网格 0.25 m</span><span>Esc 取消拖动</span></div></div>
+   <div class="scene-panel"><div class="scene-top"><strong>客厅 <small>6 × 5 m</small></strong><button class="secondary" :disabled="dragging" @click="resetView()">复位视角</button></div><div ref="host" class="canvas" aria-label="3D 客厅，左键拖动家具，右键拖动旋转视角，滚轮缩放"><p v-if="error" role="alert">{{error}}</p></div><div class="legend"><span><i></i>选中家具</span><span>左键移动家具</span><span>右键旋转视角</span><span>滚轮缩放</span><span>Esc 取消拖动</span></div></div>
    <aside><div class="section-label">房间里的家具</div><button v-for="f in store.items" :key="f.id" class="furniture" :class="{selected:store.selected===f.id}" :disabled="dragging" :aria-pressed="store.selected===f.id" @click="store.selected=f.id"><span class="color" :style="{background:'#'+f.color.toString(16)}"></span><span>{{f.name}}<small>{{f.w}} × {{f.d}} m</small></span><span class="state">{{f.locked?'已锁定':'可移动'}}</span></button>
     <div class="tools"><h2>{{selected.name}}</h2><p>锁定后，这件家具不会自动让位。</p><button class="secondary" :disabled="dragging" @click="store.toggle()">{{selected.locked?'解锁家具':'锁定位置'}}</button></div>
     <div class="experiment"><span class="section-label">第一次试验</span><ol><li>拖动沙发靠近茶几</li><li>观察茶几自动让位</li><li>松手，再撤销这次调整</li></ol><p>仅一件家具让位，不使用物理模拟。AI 和评分将在后续阶段加入。</p></div>
