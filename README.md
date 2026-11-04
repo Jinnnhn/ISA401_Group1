@@ -1,62 +1,197 @@
-# SpaceMate · React 布局初版
+# SpaceMate
 
-顶部“切换房型”下拉框现在提供 **林间公寓**（客厅/卧室/书房）和 **晴空两居**（横厅/主卧/次卧）。两个房型的家具、门状态和撤销/重做记录在当前会话中分别保留；“保存布局”一次保存两个房型及当前选择，刷新后恢复。旧版单房型存档自动迁移为林间公寓，原存储项不覆盖。JSON 导入/导出和恢复示例只影响当前房型。
+**An interactive 2D/3D room-layout editor built with React, TypeScript, and Three.js.**
 
-独立的 React + TypeScript + Three.js 桌面浏览器原型。与旁边的 Vue 项目互不覆盖。
+SpaceMate is an ISA401 Human–AI Interaction coursework prototype for arranging furniture, exploring floor plans, and testing spatial editing interactions. It includes an AI-assistant interface placeholder; AI-generated layout suggestions are not connected yet. The current application interface is in Chinese.
 
-## 启动
+## Getting Started
 
-需要 Node.js 22.12+。在本文件所在文件夹中运行：
+### Requirements
 
-```powershell
-npm.cmd install
-npm.cmd run dev
+- Node.js 22.12 or later in a compatible LTS release.
+- npm.
+- A desktop browser with WebGL support and hardware acceleration enabled.
+- A mouse with left, right, and middle buttons for the full set of editing controls.
+
+### Installation
+
+```bash
+git clone https://github.com/Jinnnhn/ISA401_Group1.git
+cd ISA401_Group1
+npm ci
+npm run dev
 ```
 
-打开 `http://127.0.0.1:5178/`。第一次已安装依赖后，只需运行第二条命令。也可以双击 `启动初版.cmd`。`npm.cmd run build` 用于类型检查与生产构建，`npm.cmd test` 检查旋转占地、挡门、锁定和跨房间数据规则。
+Open **http://127.0.0.1:5178/**. On Windows, use `npm.cmd` if PowerShell blocks `npm.ps1`. After installing dependencies, you can also double-click `启动初版.cmd` to start the editor.
 
-## 请试用这些操作
+### Available Commands
 
-1. 先左键单击家具选中，再次按住拖动才会移动；从未选中的家具上开始拖动会框选，不会直接移动它。选中显示立体虚线包围框和尺寸。属性面板可旋转 90°、换色、替换、复制、删除及锁定。
-2. 拖动显示屏幕虚线框及候选数量；框选工具可从任意位置开始，锁定家具不会被框选，但仍可单击选中。Shift 点击多选。拖动已选中的多件家具时保持相对位置；包含锁定家具时整个批量移动禁止。
-3. 右键拖动旋转、中键拖动平移、滚轮缩放。2D 模式固定俯视，3D 模式可旋转。复位视角不修改布局。
-4. 点击房门：切换开启/关闭、左/右铰链、内/外开。2D 显示开启弧线，3D 显示实际门扇。窗户支持选择与尺寸查看。
-5. 家具拖到墙边会停住，按旋转后的完整占地限制在墙体内侧；多选拖动时整组停住并保持间距。旋转、替换和坐标输入同样校正墙内边界，家具太大则拒绝操作。橙色轮廓继续提示家具重叠或挡门。门关闭时仍检查完整开门范围。
-6. M 或工具栏进入两点测量；点击地面两次。Esc 清除测量。尺寸按钮显示房间宽深。
-7. 切换客厅、卧室、书房后再切回来，位置应保留。小地图同步更新，点击放大后可点击房间切换，拖动平移、滚轮缩放；虚线显示主视图地面的投影范围。
-8. 保存布局后刷新，所有房间、门和锁定状态应恢复。导出 JSON 可跨浏览器备份，导入可撤销。
-9. Ctrl+Z 撤销、Ctrl+Shift+Z / Ctrl+Y 重做、Ctrl+S 保存、Ctrl+D 复制、R 旋转、Delete 删除、V 选择、B 框选。
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the local development server on port 5178. |
+| `npm run build` | Run TypeScript checks and produce a production build in `dist/`. |
+| `npm test` | Run the layout, persistence, selection, and camera-interaction tests. |
 
-## 本版边界
+## Technology Stack
 
-- 示例为三间矩形房，房型管理可改尺寸和名称；尚无自由绘墙、自动拼接墙体或自由增删房间。
-- 家具为程序生成的简化模型；北/西墙较高、南/东墙切低以方便观察，非建筑施工图。
-- 碰撞基于旋转矩形占地和门的 90° 扇形（多边形近似），不使用物理引擎、不检测通道规范。
-- 框选以家具中心点投影为准。多选旋转是各自绕中心转动，不是整个组合绕共同中心转动。基础对齐支持多选沿 Z 中心线对齐；网格吸附为 10 cm。
-- 保存到当前浏览器的 localStorage，没有云端账户；只在点击保存或 Ctrl+S 后持久化，建议额外导出 JSON。
-- 本版没有 AI 布局建议、模型 API、自动评分或正式用户研究。先验证编辑器体验，再决定下一步。
-- 桌面鼠标优先，触屏手势未做专门验收。工具界面和提示为中文。
+| Layer | Technology | Role |
+| --- | --- | --- |
+| Core rendering engine | Three.js 0.180 | WebGL rendering, cameras, lighting, furniture geometry, and scene management. |
+| Frontend framework | React 19 | Toolbars, property panels, floor-plan controls, and the assistant interface. |
+| Programming language | TypeScript 5.9 | Typed room, furniture, door, material, and interaction data. |
+| Development and build tooling | Vite 7 | Local development, module loading, and production bundling. |
+| Camera and input controls | Three.js `OrbitControls` and custom Pointer Events handlers | View rotation, panning, zooming, object dragging, and click-versus-drag handling. |
+| Picking and selection | Three.js `Raycaster`, screen-space marquee selection, and dashed bounding boxes | Furniture, door, and window selection with visual feedback. |
+| Application state | React state and refs | Shared floor-plan data, current selection, and independent undo/redo histories. |
+| Persistence | Browser `localStorage` and JSON import/export | Save layouts locally and transfer individual floor plans between browsers. |
+| Geometry validation | Custom TypeScript geometry functions | Rotated furniture footprints, wall-boundary constraints, overlap checks, and door-swing checks. |
+| Models and materials | Procedural Three.js meshes and Canvas textures | Simplified furniture models and selectable floor/wall finishes without external asset downloads. |
+| Interface icons | Lucide React | Consistent toolbar and panel icons. |
+| Testing | Node.js test runner, `node:assert`, and `tsx` | Automated checks for geometry, state isolation, storage compatibility, and interaction rules. |
 
-## 代码结构
+The current prototype runs entirely in the browser. It does not require a backend, database server, physics engine, or AI API key.
 
-- `src/model.ts`：户型数据、旋转占地、碰撞、门扇几何、移动和导入校验。
-- `src/Scene.tsx`：Three.js 画布、相机、模型、拾取、拖动、框选、测量和全屋地图。
-- `src/App.tsx`：React 属性面板、房间管理、历史、保存和导入导出。
-- `src/style.css`：页面视觉与不同桌面宽度的布局。
+## Interface Layout
 
-验证结果详见 `验收记录.md`。浏览器交互检查不代表真实用户研究，也不代表你已经接受操作手感。
+### Main Editing Canvas
 
-## 面板、AI 界面占位与房间材质
+- Fill the available editing viewport with the room-layout canvas.
+- Switch between a **2D top-down view** and an interactive **3D view**.
+- Display clear furniture, door, and window selection feedback, including outlines, bounding boxes, and dimensions where applicable.
+- Provide **undo**, **redo**, and **reset view** controls.
+- Keep the toolbar above the canvas as a floating interface.
 
-- 左侧工具栏底部“AI 建议”展开空间助手。底部包含需求输入、作用范围、示例快捷填入和“生成建议”按钮；目前只显示未接入提示，不调用 AI、不生成结果，也不修改布局。
-- 物件面板、全屋预览、空间助手均可通过标题处 `>` 收起，再通过对应展开按钮恢复。助手覆盖在画布上，不压缩画布；最大宽度 680 px、最大高度 220 px，可拖动标题栏移动，窗口缩小时会限制在编辑区域内。
-- 右侧“材质”标签提供四种地板（浅橡木、深胡桃木、水磨石、哑光瓷砖）和四种墙面（暖白漆、鼠尾草绿、微水泥、白色砖墙）。使用本地程序纹理，应用于当前房间，主画布和全屋地图同步。
-- 材质属于布局数据，支持撤销/重做、各房间独立、房型切换保留、本地保存和 JSON 导入导出。无材质字段的旧存档默认浅橡木和暖白墙面。
+### Furniture Properties
 
-## 右键与墙体修复
+- Inspect the selected furniture and its basic dimensions.
+- Change its position, orientation, and color.
+- Replace, copy, delete, lock, or unlock furniture.
+- Preserve the original position and orientation when replacing furniture where possible. If necessary, adjust the position to keep the replacement inside the room.
+- Clearly indicate whether furniture is locked.
+- Support batch movement, deletion, and locking. Disable incompatible property actions when the current selection cannot perform them together.
 
-3D 主视图中按住右键：左右拖动环绕，上下拖动改变俯仰；限制相机保持在地面上方。松开右键、Esc、失去焦点或指针取消时结束旋转。该手势独立于左键编辑和中键平移，家具拖动期间不会被右键抢占。2D 主视图保持俯视，右键提示切换到 3D。
+### Floor-Plan and Room Management
 
-墙体为 12 cm 厚，家具限制在墙体内侧并保留 1 mm 计算余量。到墙边时墙体边界优先于网格吸附，属性坐标可能不是 0.1 m 整数倍。原存档若有未锁定家具越界，读取时会移回墙内并提示重新保存；不改写原存档直到用户保存。
+- Manage floor plans from the top bar.
+- Switch between the **Forest Apartment** (`林间公寓`) and **Sunny Two-Bedroom** (`晴空两居`) examples.
+- Preserve independent furniture layouts, door states, materials, and in-session undo/redo histories for each floor plan.
+- Preserve each room's layout when switching between rooms.
+- Edit the current floor-plan name and basic room dimensions.
+- Save both floor plans locally. JSON import/export and restoring an example affect only the current floor plan.
 
-右键单击已选家具可取消该家具的选择（多选时只移除点击的这一件），2D/3D 均可用；右键拖动仍用于 3D 视角旋转。5 px 内的轻微移动按单击处理，真正拖动不会误取消选择。
+### Whole-House Mini Map
+
+- Show a small **3D overview of the entire home** in the lower-left corner.
+- Click the map to open an enlarged whole-house view.
+- Click a room in the enlarged map to switch the main editor to that room.
+- Support panning and zooming in the enlarged map.
+- Show the main view's ground-plane coverage, clipped to the active room, as a dashed outline.
+- Use the same floor-plan data as the main canvas so furniture, room dimensions, and materials update together.
+
+### Floating Panels and Assistant Placeholder
+
+- The furniture panel, whole-house preview, and space assistant each have a **`>` button** to collapse them and a control to reopen them.
+- The **AI Suggestions** button opens the space assistant.
+- The assistant floats above the canvas without reducing the canvas size. It has a maximum width of **680 px** and a maximum height of **220 px**.
+- Drag the assistant's title bar to reposition it within the editing area.
+- The assistant includes a request field, a scope selector, example prompts, and a **Generate Suggestions** button.
+- **AI functionality is not implemented:** the button only displays a placeholder notice. It does not submit requests to an AI service or change the layout.
+
+## Interaction Design
+
+### Mouse Controls
+
+| Action | Behavior |
+| --- | --- |
+| Left-click furniture | Select it and show its properties. Locked furniture can also be selected individually. |
+| Left-drag already-selected furniture | Move it, or move the selected group while preserving relative positions. |
+| Left-drag from empty space or unselected furniture | Draw a dashed selection box instead of immediately moving furniture. |
+| Use the marquee tool | Start a selection box from any point on the canvas. |
+| Shift + left-click | Add or remove furniture from the selection. |
+| Right-click selected furniture | Remove that furniture from the selection; other selected furniture remain selected. |
+| Right-drag in 3D | Orbit the room view and change its elevation angle. |
+| Middle-drag | Pan the view horizontally and vertically. |
+| Mouse wheel | Zoom in or out. |
+
+A movement threshold distinguishes a click from a drag. **Furniture must be selected with a separate click before it can be dragged.** Locked furniture are excluded from marquee selection but remain individually clickable for inspection and unlocking.
+
+### Object Feedback and Placement
+
+- Highlight furniture on hover and show a **3D dashed bounding box** when selected.
+- Show a dashed screen-space marquee, candidate count, and selection feedback while box-selecting.
+- Support **10 cm grid snapping** and basic multi-object alignment along the Z centerline.
+- Keep the full rotated furniture footprint inside the room's wall boundaries. Group movement stops at the wall without changing the spacing between selected objects.
+- Apply wall-boundary validation to rotation, replacement, coordinate input, copying, and imported layouts as well.
+- Show visual warnings when furniture overlap or occupy a door's opening area. These warnings currently allow further editing; wall-boundary violations are constrained.
+- Keep locked furniture protected from movement, rotation, replacement, and deletion.
+
+### Measurement
+
+- Display the room's width and depth.
+- Show furniture dimensions in the property panel and selection labels.
+- Use the measurement tool to click two points on the ground plane and display their distance.
+
+### Floor and Wall Materials
+
+- Choose from **light oak, dark walnut, terrazzo, and matte tile** floor finishes.
+- Choose from **warm white paint, sage green paint, microcement, and white brick** wall finishes.
+- Apply finishes to the current room, with synchronized updates in the main view and whole-house map.
+- Include material changes in undo/redo, local saves, and JSON import/export.
+
+## Door Interaction
+
+- Support selectable doors in living rooms and bedrooms.
+- Inspect door properties and switch the door leaf between **open** and **closed** states.
+- Configure **left or right hinges** and **inward or outward opening** independently.
+- Show the door leaf and its opening arc in 2D.
+- Show the door leaf's open or closed position in 3D.
+- Include the complete opening area in furniture collision checks, even when the door is closed, and warn when furniture would block the door.
+
+Hinge labels follow each wall's local coordinate direction. Door-opening checks use an approximately polygonal 90-degree swing sector rather than a physics simulation.
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl + Z` | Undo. |
+| `Ctrl + Shift + Z` / `Ctrl + Y` | Redo. |
+| `Ctrl + S` | Save both floor plans locally. |
+| `Ctrl + D` | Duplicate selected furniture. |
+| `R` | Rotate selected furniture by 90 degrees. |
+| `Delete` / `Backspace` | Delete selected, unlocked furniture. |
+| `V` | Activate the selection tool. |
+| `B` | Activate the marquee tool. |
+| `M` | Activate the measurement tool. |
+| `Esc` | Cancel an active drag, clear measurements and selection, or close a dialog. |
+
+## Project Structure
+
+```text
+src/
+  App.tsx             Application state, property panels, history, and persistence
+  Scene.tsx           Three.js rendering, picking, dragging, measurement, and maps
+  AssistantPanel.tsx  Floating assistant interface placeholder
+  SurfacePanel.tsx    Room material selection interface
+  model.ts            Data types, sample plans, geometry, and validation
+  projects.ts         Independent floor plans and storage migration
+  selection.ts        Selection-versus-movement gesture rules
+  rightOrbit.ts       Right-click and right-drag handling
+  materials.ts        Procedural floor and wall textures
+  model.test.ts       Automated tests
+  style.css           Interface styling and responsive layout
+  main.tsx            React entry point
+screenshots/          Prototype screenshots
+```
+
+## Current Scope and Limitations
+
+- Floor plans currently consist of predefined rectangular rooms. Freehand wall drawing, automatic wall joining, and arbitrary room creation are not implemented.
+- Furniture models are simplified, programmatically generated representations. The editor is not a construction or building-code validation tool.
+- Window selection and dimension inspection are supported; window opening/closing is not implemented.
+- Overlap detection uses 2D rotated footprints. It does not model full 3D collisions or physical movement.
+- Marquee selection uses projected furniture center points. Multi-object rotation turns each object around its own center.
+- Undo/redo histories are separate per floor plan during the current session and are not restored after a page reload.
+- Layouts are persisted only when **Save Layout** or `Ctrl + S` is used. Saves stay in the current browser; there is no cloud account or synchronization.
+- AI integration, automatic layout optimization, and formal user studies remain future work.
+
+The latest automated suite contains **24 tests**. Browser-check details are recorded in [the verification log](验收记录.md); they do not constitute formal user-study results or user acceptance.
