@@ -45,7 +45,7 @@ Open **http://127.0.0.1:5178/**. On Windows, use `npm.cmd` if PowerShell blocks 
 | Application state | React state and refs | Shared floor-plan data, current selection, and independent undo/redo histories. |
 | Persistence | Browser `localStorage` and JSON import/export | Save layouts locally and transfer individual floor plans between browsers. |
 | Geometry validation | Custom TypeScript geometry functions | Rotated furniture footprints, wall-boundary constraints, overlap checks, and door-swing checks. |
-| Models and materials | Procedural Three.js meshes and Canvas textures | Simplified furniture models and selectable floor/wall finishes without external asset downloads. |
+| Models and materials | Local GLB assets, procedural Three.js meshes, and Canvas textures | Shared sofa/chair models in the editor and maps, shaped furniture, and selectable floor/wall finishes. See `public/models/ATTRIBUTION.md` for asset credits. |
 | Interface icons | Lucide React | Consistent toolbar and panel icons. |
 | Testing | Node.js test runner, `node:assert`, and `tsx` | Automated checks for geometry, state isolation, storage compatibility, and interaction rules. |
 
@@ -66,7 +66,7 @@ The current prototype runs entirely in the browser. It does not require a backen
 - Inspect the selected furniture and its basic dimensions.
 - Change its position, orientation, and color.
 - Replace, copy, delete, lock, or unlock furniture.
-- Preserve the original position and orientation when replacing furniture where possible. If necessary, adjust the position to keep the replacement inside the room.
+- Preserve the original position and orientation when replacing furniture; reject replacements that introduce overlaps, block doors, or exceed room boundaries.
 - Clearly indicate whether furniture is locked.
 - Support batch movement, deletion, and locking. Disable incompatible property actions when the current selection cannot perform them together.
 
@@ -173,6 +173,9 @@ src/
   AssistantPanel.tsx  Floating assistant interface placeholder
   SurfacePanel.tsx    Room material selection interface
   model.ts            Data types, sample plans, geometry, and validation
+  placement.ts        Drag previews, single-object yielding, and safe duplication
+  architecture.ts     Room heights and wall openings
+  furniture.ts        Shared GLB cache and procedural furniture models
   projects.ts         Independent floor plans and storage migration
   selection.ts        Selection-versus-movement gesture rules
   rightOrbit.ts       Right-click and right-drag handling
@@ -186,7 +189,7 @@ screenshots/          Prototype screenshots
 ## Current Scope and Limitations
 
 - Floor plans currently consist of predefined rectangular rooms. Freehand wall drawing, automatic wall joining, and arbitrary room creation are not implemented.
-- Furniture models are simplified, programmatically generated representations. The editor is not a construction or building-code validation tool.
+- Sofa and chair models use local GLB assets; other furniture uses procedural geometry. Room dimensions can be entered in meters, but sample plans are illustrative and are not surveyed homes. The editor is not a construction or building-code validation tool.
 - Window selection and dimension inspection are supported; window opening/closing is not implemented.
 - Overlap detection uses 2D rotated footprints. It does not model full 3D collisions or physical movement.
 - Marquee selection uses projected furniture center points. Multi-object rotation turns each object around its own center.
@@ -194,4 +197,24 @@ screenshots/          Prototype screenshots
 - Layouts are persisted only when **Save Layout** or `Ctrl + S` is used. Saves stay in the current browser; there is no cloud account or synchronization.
 - AI integration, automatic layout optimization, and formal user studies remain future work.
 
-The latest automated suite contains **24 tests**. Browser-check details are recorded in [the verification log](验收记录.md); they do not constitute formal user-study results or user acceptance.
+The latest automated suite contains **32 tests**. Earlier browser-check details are recorded in [the verification log](验收记录.md); they do not constitute formal user-study results or user acceptance.
+
+
+## 主画布与全屋地图模型同步
+
+主画布、左下角小地图及放大的全屋地图使用同一家具模型工厂与缓存的 GLB 资源。地图在模型加载完成后自行刷新，不再保留旧版方块沙发。地图关闭阴影并保留低矮剖切墙面以便导航，家具形状、纹理、朝向与位置保持一致。
+
+主视图拖动家具时，以独立的临时布局更新地图中的模型位置；松手后提交共享布局，Esc 取消则地图恢复原位。预览不进入保存或撤销历史。旋转、替换、删除、材质和房间切换继续使用原有共享数据。
+
+
+## 布局与交互优化
+
+- 默认隐藏右侧属性和低高度窗口的小地图，AI 占位收为紧凑输入条。选择家具时打开属性；点击空白或 Esc 可收起。撤销重做合并到顶部，工具栏、地图、视图控制和助手采用独立停靠区域。
+- 相机投影按未遮挡区域居中，“适配当前房间”依据实际可见面积取景。每个房间的编辑视角与室内预览视角分别记忆。
+- 室内预览只读：隐藏编辑工具，阻止 Delete、R、复制、撤销等编辑快捷键。退出后恢复原编辑模式、选择、面板状态和视角。
+- 选择工具直接拖家具、空白处框选；专用框选工具可从任意位置开始。单击和拖动以 5 px 阈值区分。锁定家具拖动不会误触框选。
+- 让位采用确定性网格搜索和位置过渡，仅一件未锁定家具移动，无物理模拟或连锁推挤。多选不触发让位；一次撤销恢复被拖家具及让位家具。地图同步临时布局，Esc 一并恢复。
+- 旋转、替换、坐标与尺寸输入不接受新增的家具重叠或挡门冲突。复制会寻找附近有效空位，找不到则保持原布局。已有存档中的冲突不会静默删除，仍可手动修正。
+- Esc 优先处理拖动、视角手势、测量，再处理当前弹窗、室内预览、展开助手、工具模式，最后清除选择。数值输入中的 Esc 仅恢复当前字段。
+- 非法数值保留输入并显示原因，不会静默恢复旧值。未保存改动在刷新或关闭时触发浏览器提醒；房间和户型切换仍保留会话数据，不反复询问。
+- AI 仍是明确标注的未接入占位界面，按钮禁用；本次优化不包含模型服务。

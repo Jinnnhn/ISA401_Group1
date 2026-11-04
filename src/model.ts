@@ -1,18 +1,18 @@
 export type Kind = 'sofa' | 'table' | 'bed' | 'desk' | 'chair' | 'cabinet' | 'plant';
 export type Item = {id:string; roomId:string; kind:Kind; name:string; x:number; z:number; w:number; d:number; h:number; rotation:number; color:string; locked:boolean};
-export type Door = {id:string; roomId:string; wall:'north'|'south'|'east'|'west'; offset:number; width:number; hinge:'left'|'right'; inward:boolean; open:boolean};
-export type WindowItem = {id:string; roomId:string; wall:'north'|'south'|'east'|'west'; offset:number; width:number};
+export type Door = {id:string; roomId:string; wall:'north'|'south'|'east'|'west'; offset:number; width:number; height?:number;hinge:'left'|'right'; inward:boolean; open:boolean};
+export type WindowItem = {id:string; roomId:string; wall:'north'|'south'|'east'|'west'; offset:number; width:number;height?:number;sill?:number};
 export const FLOOR_MATERIALS={oak:{name:'浅橡木',color:'#d5bb92'},walnut:{name:'深胡桃木',color:'#8e6348'},stone:{name:'水磨石',color:'#bdc1b9'},tile:{name:'哑光瓷砖',color:'#deddd4'}} as const;
 export const WALL_MATERIALS={ivory:{name:'暖白漆',color:'#f2eee3'},sage:{name:'鼠尾草绿',color:'#b8c8ad'},concrete:{name:'微水泥',color:'#afb5af'},brick:{name:'白色砖墙',color:'#e7e2d6'}} as const;
-export type Room = {id:string; name:string; x:number; z:number; w:number; d:number; color:string;floorMaterial?:keyof typeof FLOOR_MATERIALS;wallMaterial?:keyof typeof WALL_MATERIALS};
+export type Room = {id:string; name:string; x:number; z:number; w:number; d:number; height?:number;color:string;floorMaterial?:keyof typeof FLOOR_MATERIALS;wallMaterial?:keyof typeof WALL_MATERIALS};
 export type House = {version:1; name:string; rooms:Room[]; items:Item[]; doors:Door[]; windows:WindowItem[]};
 export type Tool = 'select'|'box'|'measure';
 export const CATALOG:Record<Kind,{name:string;w:number;d:number;h:number;color:string}> = {
- sofa:{name:'云朵沙发',w:2.4,d:1,h:.82,color:'#8eaa99'},
- table:{name:'圆角茶几',w:1.2,d:.7,h:.4,color:'#bc9470'},
- bed:{name:'双人床',w:1.8,d:2.15,h:.65,color:'#e3d9c5'},
+ sofa:{name:'皮木框架沙发',w:2.73,d:.93,h:1.12,color:'#8eaa99'},
+ table:{name:'椭圆茶几',w:1.2,d:.7,h:.4,color:'#bc9470'},
+ bed:{name:'织物软包双人床',w:1.8,d:2.15,h:1,color:'#e3d9c5'},
  desk:{name:'原木书桌',w:1.4,d:.65,h:.76,color:'#b38e68'},
- chair:{name:'休闲单椅',w:.7,d:.72,h:.85,color:'#c9a07f'},
+ chair:{name:'曲面织物单椅',w:.83,d:.57,h:.69,color:'#c9a07f'},
  cabinet:{name:'收纳边柜',w:1.6,d:.42,h:.68,color:'#b99a78'},
  plant:{name:'绿植',w:.48,d:.48,h:1.25,color:'#7f9b70'}
 };
@@ -88,6 +88,19 @@ export const WALL_INSET=.061;
 export function itemInsideRoom(f:Item,r:Room){return corners(f).every(([x,z])=>x>=r.x-r.w/2+WALL_INSET-1e-7&&x<=r.x+r.w/2-WALL_INSET+1e-7&&z>=r.z-r.d/2+WALL_INSET-1e-7&&z<=r.z+r.d/2-WALL_INSET+1e-7);}
 export function constrainHouse(h:House):{house:House;adjusted:boolean;error?:string}{
  const next=copy(h);let adjusted=false;
+ for(const r of next.rooms){
+  const height=r.height??2.7;
+  if(!Number.isFinite(height)||height<2||height>5)return {house:h,adjusted:false,error:'房间净高请填写 2 至 5 米范围内的实测值。'};
+  if(next.items.some(f=>f.roomId===r.id&&f.h>height))return {house:h,adjusted:false,error:`${r.name}中有家具高于房间净高，请先修改家具尺寸。`};
+  for(const d of next.doors.filter(d=>d.roomId===r.id)){
+   const span=d.wall==='north'||d.wall==='south'?r.w:r.d;
+   if((d.height??2.1)>height||Math.abs(d.offset)+d.width/2>span/2)return {house:h,adjusted:false,error:`${r.name}的门洞超出墙面，请先调整门洞位置或尺寸。`};
+  }
+  for(const w of next.windows.filter(w=>w.roomId===r.id)){
+   const span=w.wall==='north'||w.wall==='south'?r.w:r.d;
+   if((w.sill??.85)+(w.height??1.35)>height||Math.abs(w.offset)+w.width/2>span/2)return {house:h,adjusted:false,error:`${r.name}的窗洞超出墙面，请先调整窗台、位置或尺寸。`};
+  }
+ }
  for(const f of next.items){const r=roomOf(next,f.roomId);const points=corners(f),xs=points.map(p=>p[0]),zs=points.map(p=>p[1]),minX=Math.min(...xs),maxX=Math.max(...xs),minZ=Math.min(...zs),maxZ=Math.max(...zs);
   if(maxX-minX>r.w-2*WALL_INSET+1e-7||maxZ-minZ>r.d-2*WALL_INSET+1e-7)return {house:h,adjusted:false,error:`${f.name}在当前朝向放不进${r.name}，请先调整尺寸或朝向。`};
   const dx=Math.min(Math.max(0,r.x-r.w/2+WALL_INSET-minX),r.x+r.w/2-WALL_INSET-maxX),dz=Math.min(Math.max(0,r.z-r.d/2+WALL_INSET-minZ),r.z+r.d/2-WALL_INSET-maxZ);
@@ -107,8 +120,8 @@ export function validHouse(value:unknown):value is House {
  const num=(n:unknown)=>typeof n==='number'&&Number.isFinite(n)&&Math.abs(n)<10000;
  if(h.version!==1||typeof h.name!=='string'||!Array.isArray(h.rooms)||!h.rooms.length||h.rooms.length>40||!Array.isArray(h.items)||h.items.length>500||!Array.isArray(h.doors)||h.doors.length>100||!Array.isArray(h.windows)||h.windows.length>100)return false;
  const ids=new Set<string>();const id=(x:{id:string})=>typeof x.id==='string'&&!ids.has(x.id)&&(ids.add(x.id),true);
- if(!h.rooms.every(r=>id(r)&&typeof r.name==='string'&&[r.x,r.z,r.w,r.d].every(num)&&r.w>.5&&r.d>.5&&typeof r.color==='string'&&(r.floorMaterial===undefined||Object.hasOwn(FLOOR_MATERIALS,r.floorMaterial))&&(r.wallMaterial===undefined||Object.hasOwn(WALL_MATERIALS,r.wallMaterial))))return false;
+ if(!h.rooms.every(r=>id(r)&&typeof r.name==='string'&&[r.x,r.z,r.w,r.d].every(num)&&r.w>.5&&r.d>.5&&(r.height===undefined||num(r.height)&&r.height>=2&&r.height<=5)&&typeof r.color==='string'&&(r.floorMaterial===undefined||Object.hasOwn(FLOOR_MATERIALS,r.floorMaterial))&&(r.wallMaterial===undefined||Object.hasOwn(WALL_MATERIALS,r.wallMaterial))))return false;
  const room=(r:string)=>h.rooms.some(x=>x.id===r);
  const opening=(d:Door|WindowItem)=>id(d)&&room(d.roomId)&&['north','south','east','west'].includes(d.wall)&&num(d.offset)&&num(d.width)&&d.width>.1&&d.width<20;
- return h.items.every(f=>id(f)&&room(f.roomId)&&Object.hasOwn(CATALOG,f.kind)&&typeof f.name==='string'&&/^#[0-9a-f]{6}$/i.test(f.color)&&[f.x,f.z,f.w,f.d,f.h,f.rotation].every(num)&&f.w>0&&f.d>0&&f.h>0&&typeof f.locked==='boolean')&&h.doors.every(d=>opening(d)&&['left','right'].includes(d.hinge)&&typeof d.inward==='boolean'&&typeof d.open==='boolean')&&h.windows.every(opening);
+ return h.items.every(f=>id(f)&&room(f.roomId)&&Object.hasOwn(CATALOG,f.kind)&&typeof f.name==='string'&&/^#[0-9a-f]{6}$/i.test(f.color)&&[f.x,f.z,f.w,f.d,f.h,f.rotation].every(num)&&f.w>0&&f.d>0&&f.h>0&&f.h<=(roomOf(h,f.roomId).height??2.7)&&typeof f.locked==='boolean')&&h.doors.every(d=>opening(d)&&['left','right'].includes(d.hinge)&&typeof d.inward==='boolean'&&typeof d.open==='boolean'&&(d.height===undefined||num(d.height)&&d.height>=1.8&&d.height<=(roomOf(h,d.roomId).height??2.7)))&&h.windows.every(w=>opening(w)&&(w.height===undefined||num(w.height)&&w.height>.1)&&(w.sill===undefined||num(w.sill)&&w.sill>=0)&&(w.height??1.35)+(w.sill??.85)<=(roomOf(h,w.roomId).height??2.7));
 }

@@ -8,7 +8,6 @@ type Orbit = Pick<OrbitControls,'object'|'target'|'enabled'|'enableDamping'|'min
 export function bindRightOrbit(canvas:HTMLElement,controls:Orbit,options:{
  canRotate:()=>boolean;
  message:(text:string)=>void;
- onClick?:(event:PointerEvent)=>boolean;
 }) {
  let gesture:{id:number;x:number;y:number;startX:number;startY:number;damping:boolean;moved:boolean;rotate:boolean}|null=null;
  const sphere=new Spherical(),offset=new Vector3();
@@ -45,7 +44,7 @@ export function bindRightOrbit(canvas:HTMLElement,controls:Orbit,options:{
   controls.object.lookAt(controls.target);controls.update();
   gesture.x=event.clientX;gesture.y=event.clientY;
  }
- function up(event:PointerEvent){if(!gesture||event.pointerId!==gesture.id||event.button!==2)return;event.preventDefault();event.stopImmediatePropagation();const {moved,rotate}=gesture;finish();if(!moved&&options.onClick?.(event))return;options.message(moved?(rotate?'视角已调整 · 家具位置保持不变。':'2D 模式保持俯视；请切换到 3D 后旋转。'):'右键单击已选家具可取消选择；在 3D 中按住右键拖动可旋转视角。');}
+ function up(event:PointerEvent){if(!gesture||event.pointerId!==gesture.id||event.button!==2)return;event.preventDefault();event.stopImmediatePropagation();const {moved,rotate}=gesture;finish();options.message(moved?(rotate?'视角已调整 · 家具位置保持不变。':'2D 模式保持俯视；请切换到 3D 后旋转。'):'右键用于旋转视角；点击空白处或按 Esc 可取消选择。');}
  function lost(event:PointerEvent){if(gesture?.id===event.pointerId)finish();}
  function key(event:KeyboardEvent){if(event.key==='Escape')finish();}
  canvas.addEventListener('pointerdown',down,true);canvas.addEventListener('pointermove',move,true);canvas.addEventListener('pointerup',up,true);canvas.addEventListener('pointercancel',lost,true);canvas.addEventListener('lostpointercapture',lost,true);window.addEventListener('blur',finish);window.addEventListener('keydown',key);
