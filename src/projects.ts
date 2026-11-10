@@ -1,6 +1,6 @@
 import {alternateHouse,constrainHouse,initialHouse,validHouse,type House} from './model';
 
-export const PLAN_OPTIONS=[{id:'forest',name:'林间公寓',description:'客厅 + 卧室 + 书房 · 62.4 m²'},{id:'sky',name:'晴空两居',description:'横厅 + 主卧 + 次卧 · 56.0 m²'}] as const;
+export const PLAN_OPTIONS=[{id:'forest',name:'林间公寓',description:'客厅 + 卧室 + 书房 · 46.6 m²'},{id:'sky',name:'晴空两居',description:'横厅 + 主卧 + 次卧 · 56.0 m²'}] as const;
 export type PlanId=typeof PLAN_OPTIONS[number]['id'];
 export type Workspace={version:2;activePlanId:PlanId;projects:Record<PlanId,House>};
 export function defaultWorkspace():Workspace{return {version:2,activePlanId:'forest',projects:{forest:initialHouse(),sky:alternateHouse()}};}

@@ -1,9 +1,30 @@
 import * as T from 'three';
 import {FLOOR_MATERIALS,WALL_MATERIALS,type Room} from './model';
 
-// Local procedural textures: no remote assets, downloads, or model services.
+// Image-based surfaces: seamless tiles generated for this project in public/textures.
+const IMAGE_SOURCES={parquet:'/textures/parquet.jpg',damask:'/textures/damask.jpg'} as const;
+const surfaceImages=new Map<string,HTMLImageElement>();
+function surfaceImage(src:string){
+ let image=surfaceImages.get(src);
+ if(!image){image=new Image();image.decoding='async';image.src=src;surfaceImages.set(src,image);}
+ return image;
+}
+function imageTexture(src:string,repeatX:number,repeatY:number){
+ const image=surfaceImage(src);
+ const texture=new T.Texture(image);
+ texture.colorSpace=T.SRGBColorSpace;texture.wrapS=texture.wrapT=T.RepeatWrapping;
+ texture.repeat.set(Math.max(.25,repeatX),Math.max(.25,repeatY));texture.anisotropy=8;
+ if(image.complete&&image.naturalWidth>0)texture.needsUpdate=true;
+ else image.addEventListener('load',()=>{texture.needsUpdate=true;},{once:true});
+ return texture;
+}
+
+// Local procedural textures plus the two generated image tiles: no remote services.
 export function roomTexture(room:Room,surface:'floor'|'wall'){
- const key=surface==='floor'?(room.floorMaterial??'oak'):(room.wallMaterial??'ivory');
+ const key=surface==='floor'?(room.floorMaterial??'parquet'):(room.wallMaterial??'damask');
+ if(key==='parquet')return imageTexture(IMAGE_SOURCES.parquet,room.w/2,room.d/2);
+ // Wall panels override the repeat per panel so the damask keeps a constant scale.
+ if(key==='damask')return imageTexture(IMAGE_SOURCES.damask,2,1);
  const palette:Record<string,{color:string}>=surface==='floor'?FLOOR_MATERIALS:WALL_MATERIALS;
  const color=palette[key]?.color??(surface==='floor'?'#d5bb92':'#f2eee3');
  const canvas=document.createElement('canvas');canvas.width=512;canvas.height=512;const c=canvas.getContext('2d')!;

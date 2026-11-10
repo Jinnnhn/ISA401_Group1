@@ -8,7 +8,7 @@ import SurfacePanel from './SurfacePanel';
 import {roomHeight,doorHeight,windowHeight,windowSill} from './architecture';
 import {addedConflicts,placeCopies} from './placement';
 
-const STORAGE='spacemate-react-workspace-v2';
+const STORAGE='spacemate-react-workspace-v4';
 type History={house:House;past:House[];future:House[]};
 function load(){try{const parse=(key:string)=>{try{return JSON.parse(localStorage.getItem(key)??'null');}catch{return null;}};return restoreWorkspace(parse(STORAGE),parse('spacemate-react-house-v1'));}catch{return {workspace:defaultWorkspace(),recovered:false,error:'无法读取本地保存，已载入示例户型。'};}}
 function Button({icon,children,title,onClick,disabled=false,className=''}:{icon?:ReactNode;children?:ReactNode;title?:string;onClick?:()=>void;disabled?:boolean;className?:string}){return <button type="button" title={title} aria-label={title} onClick={onClick} disabled={disabled} className={className}>{icon}{children}</button>;}

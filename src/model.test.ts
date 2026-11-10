@@ -17,19 +17,22 @@ test('房间材质随房型存档往返且不污染其他房间',()=>{const w=de
 test('旧版无材质字段兼容，非法材质拒绝导入',()=>{const h=initialHouse();assert.ok(validHouse(h));(h.rooms[0] as unknown as {floorMaterial:string}).floorMaterial='remote-url';assert.equal(validHouse(h),false);});
 
 test('单件冲突预览让一件家具就近让位，输入和其他家具保持不变',()=>{
- const base=initialHouse(),r=previewMove(base,['table'],2.15,-.3,true);assert.ok(r.valid);assert.equal(r.yieldId,'chair');assert.deepEqual(warnings(r.house),{});
+ const base=initialHouse(),table=base.items.find(f=>f.id==='table')!,chair=base.items.find(f=>f.id==='chair')!;
+ const dx=chair.x-table.x,dz=chair.z-table.z,r=previewMove(base,['table'],dx,dz,true);assert.ok(r.valid);assert.equal(r.yieldId,'chair');assert.deepEqual(warnings(r.house),{});
  assert.deepEqual(base,initialHouse());for(const f of base.items.filter(f=>!['table','chair'].includes(f.id)))assert.deepEqual(r.house.items.find(o=>o.id===f.id),f);
- assert.deepEqual(previewMove(base,['table'],2.15,-.3,true),r);
+ assert.deepEqual(previewMove(base,['table'],dx,dz,true),r);
 });
 test('锁定、挡门和多选冲突拒绝，不连锁让位',()=>{
- const base=initialHouse();base.items.find(f=>f.id==='chair')!.locked=true;assert.equal(previewMove(base,['table'],2.15,-.3,true).valid,false);
+ const base=initialHouse(),table0=base.items.find(f=>f.id==='table')!,chair0=base.items.find(f=>f.id==='chair')!;
+ const dx=chair0.x-table0.x,dz=chair0.z-table0.z;
+ base.items.find(f=>f.id==='chair')!.locked=true;assert.equal(previewMove(base,['table'],dx,dz,true).valid,false);
  const h=initialHouse(),table=h.items.find(f=>f.id==='table')!,p=doorPoint(h,h.doors[0],45,.5);
  assert.equal(previewMove(h,['table'],p[0]-table.x,p[1]-table.z,false).valid,false);
  const group=previewMove(h,['sofa','table'],1.6,0,true);assert.equal(group.valid,false);assert.equal(group.yieldId,undefined);
 });
 test('没有可让位空位时返回无效预览',()=>{
- const h=initialHouse();h.rooms=[{...h.rooms[0],w:2,d:2}];h.doors=[];h.windows=[];
- h.items=[{...h.items[1],id:'small',w:.2,d:.2,x:-.8,z:-.8},{...h.items[2],id:'large',w:1.4,d:1.4,x:0,z:0,rotation:0}];
+ const h=initialHouse(),r=h.rooms[0];h.rooms=[{...r,w:2,d:2}];h.doors=[];h.windows=[];
+ h.items=[{...h.items[1],id:'small',w:.2,d:.2,x:r.x-.8,z:r.z-.8},{...h.items[2],id:'large',w:1.4,d:1.4,x:r.x,z:r.z,rotation:0}];
  assert.deepEqual(warnings(h),{});assert.equal(previewMove(h,['small'],.8,.8,false).valid,false);
 });
 test('新冲突检测与复制空位搜索不破坏原布局',()=>{
@@ -50,12 +53,12 @@ test('完整墙面扣除窗洞并保留窗台与窗上墙',()=>{
  assert.ok(parts.some(p=>p.low===0&&p.high===.85));assert.ok(parts.some(p=>p.low===2.2&&p.high===2.7));
 });
 test('门洞保留真实高度门楣，降低净高不允许截断门窗',()=>{
- const h=initialHouse(),r=h.rooms[0],d=h.doors[0],parts=wallSections(h,r,'south');
+ const h=initialHouse(),r=h.rooms[0],d=h.doors[0],parts=wallSections(h,r,d.wall);
  assert.ok(parts.some(p=>p.low===2.1&&p.high===2.7));
- const area=parts.reduce((sum,p)=>sum+(p.b-p.a)*(p.high-p.low),0);assert.ok(Math.abs(area-(r.w*2.7-d.width*2.1))<1e-8);
+ const span=d.wall==='north'||d.wall==='south'?r.w:r.d,area=parts.reduce((sum,p)=>sum+(p.b-p.a)*(p.high-p.low),0);assert.ok(Math.abs(area-(span*2.7-d.width*2.1))<1e-8);
  r.height=2.1;assert.ok(constrainHouse(h).error?.includes('窗洞'));
 });
-test('旋转后的占地用于边界和重叠检测',()=>{const h=initialHouse(),f=h.items[0];f.x=2.35;f.z=0;f.w=2.4;f.d=.6;f.rotation=0;assert.ok(warnings(h)[f.id].includes('超出房间边界'));f.rotation=90;assert.ok(!warnings(h)[f.id]?.includes('超出房间边界'));assert.equal(polygonOverlap(corners({...f,x:0,z:0}),corners({...f,x:0,z:0})),true);});
+test('旋转后的占地用于边界和重叠检测',()=>{const h=initialHouse(),f=h.items[0],r=h.rooms[0];f.w=2.4;f.d=.6;f.x=r.x+r.w/2-WALL_INSET-1.2+.2;f.z=r.z;f.rotation=0;assert.ok(warnings(h)[f.id].includes('超出房间边界'));f.rotation=90;assert.ok(!warnings(h)[f.id]?.includes('超出房间边界'));assert.equal(polygonOverlap(corners({...f,x:r.x,z:r.z}),corners({...f,x:r.x,z:r.z})),true);});
 test('门关闭时仍检查完整开启区域',()=>{const h=initialHouse(),d=h.doors[0],f=h.items[0];d.open=false;const pivot=doorFrame(h,d),p=doorPoint(h,d,45,.5);f.x=p[0];f.z=p[1];f.w=.15;f.d=.15;assert.ok(pivot);assert.ok(warnings(h)[f.id].includes('占用房门开启区域'));d.inward=false;assert.ok(!warnings(h)[f.id]?.includes('占用房门开启区域'));});
 test('多选吸附保留相对位置且不修改其他房间',()=>{const h=initialHouse(),ids=h.items.slice(0,2).map(f=>f.id),next=moveItems(h,ids,.36,.24,true);assert.ok(Math.abs((next.items[0].x-next.items[1].x)-(h.items[0].x-h.items[1].x))<1e-8);assert.deepEqual(next.items.filter(f=>f.roomId==='bedroom'),h.items.filter(f=>f.roomId==='bedroom'));assert.notDeepEqual(next,h);assert.deepEqual(h,initialHouse());});
 test('含锁定家具的批量移动不发生部分修改',()=>{const h=initialHouse();h.items[0].locked=true;assert.deepEqual(moveItems(h,h.items.slice(0,2).map(f=>f.id),1,1,true),h);});
@@ -63,8 +66,8 @@ test('保存格式支持往返并拒绝无效数据',()=>{const h=initialHouse()
 test('向四面墙拖动时完整家具占地始终在墙内',()=>{for(const rotation of [0,45,90,135,270])for(const [dx,dz] of [[100,0],[-100,0],[0,100],[0,-100],[100,-100]])for(const grid of [false,true]){const h=initialHouse();h.items[0].rotation=rotation;const start=constrainHouse(h).house,next=moveItems(start,['sofa'],dx,dz,grid),f=next.items[0];assert.ok(itemInsideRoom(f,roomOf(next,f.roomId)),JSON.stringify({rotation,dx,dz,grid,f}));}});
 test('多选家具整体停在墙边，距离和其他房间不变',()=>{const h=initialHouse(),ids=['sofa','table'],next=moveItems(h,ids,100,100,true);for(const f of next.items.filter(f=>ids.includes(f.id)))assert.ok(itemInsideRoom(f,roomOf(next,f.roomId)));assert.ok(Math.abs((next.items[0].x-next.items[1].x)-(h.items[0].x-h.items[1].x))<1e-9);assert.ok(Math.abs((next.items[0].z-next.items[1].z)-(h.items[0].z-h.items[1].z))<1e-9);assert.deepEqual(next.items.filter(f=>!ids.includes(f.id)),h.items.filter(f=>!ids.includes(f.id)));});
 test('旋转、替换和坐标输入统一校正墙内边界，过大家具拒绝提交',()=>{const h=initialHouse();h.items[0].x=99;h.items[0].z=-99;h.items[0].rotation=45;const fixed=constrainHouse(h);assert.equal(fixed.adjusted,true);assert.ok(itemInsideRoom(fixed.house.items[0],fixed.house.rooms[0]));assert.equal(h.items[0].x,99);h.items[0].w=20;assert.ok(constrainHouse(h).error);});
-test('锁定家具不能因房间缩小被隐式移动',()=>{const h=initialHouse();h.items[0].locked=true;h.rooms[0].d=2;assert.ok(constrainHouse(h).error?.includes('锁定'));});
-test('墙内边界包含 12 cm 墙厚，不允许压进墙体',()=>{const h=initialHouse();h.items[0].x=1.8;const result=moveItems(h,['sofa'],100,0,false);const right=Math.max(...corners(result.items[0]).map(p=>p[0]));assert.ok(Math.abs(right-(3-WALL_INSET))<1e-8);});
+test('锁定家具不能因房间缩小被隐式移动',()=>{const h=initialHouse();h.items[0].locked=true;h.doors=[];h.windows=[];h.rooms[0].d=2;assert.ok(constrainHouse(h).error?.includes('锁定'));});
+test('墙内边界包含 12 cm 墙厚，不允许压进墙体',()=>{const h=initialHouse(),r=h.rooms[0];h.items[0].x=r.x;const result=moveItems(h,['sofa'],100,0,false);const right=Math.max(...corners(result.items[0]).map(p=>p[0]));assert.ok(Math.abs(right-(r.x+r.w/2-WALL_INSET))<1e-8);});
 
 class TestCanvas extends EventTarget {
  style={cursor:''};clientHeight=600;capture=new Set<number>();

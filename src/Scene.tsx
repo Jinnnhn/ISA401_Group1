@@ -30,7 +30,7 @@ export default function Scene(props:Props){
   renderer.setPixelRatio(Math.min(devicePixelRatio,1.75));renderer.shadowMap.enabled=!props.mini;renderer.shadowMap.type=T.PCFSoftShadowMap;renderer.outputColorSpace=T.SRGBColorSpace;renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;renderer.setClearColor('#e7e6e1',1);renderer.domElement.setAttribute('aria-label',props.mini?'全屋三维地图':'房间编辑画布');renderer.domElement.style.touchAction='none';el.appendChild(renderer.domElement);
   const scene=new T.Scene();let disposed=false;const facades:{group:T.Group;r:Room;wall:Wall}[]=[];const root=new T.Group(),annotation=new T.Group(),viewRoot=new T.Group(),measureRoot=new T.Group();scene.add(root,annotation,viewRoot,measureRoot);
   const environment=new RoomEnvironment();const pmrem=new T.PMREMGenerator(renderer);const envTarget=pmrem.fromScene(environment,.04);scene.environment=envTarget.texture;scene.environmentIntensity=.65;environment.dispose();pmrem.dispose();
-  scene.add(new T.HemisphereLight('#edf3ff','#9c9082',1));const sun=new T.DirectionalLight('#fff5e5',2.5);sun.position.set(-3,8,-5);sun.castShadow=!props.mini;sun.shadow.mapSize.set(2048,2048);sun.shadow.camera.left=-12;sun.shadow.camera.right=12;sun.shadow.camera.top=12;sun.shadow.camera.bottom=-12;sun.shadow.normalBias=.035;sun.shadow.bias=-.0001;scene.add(sun);
+  scene.add(new T.HemisphereLight('#edf3ff','#9c9082',1));const sun=new T.DirectionalLight('#fff5e5',2.5);sun.position.set(-3,8,-5);sun.castShadow=!props.mini;sun.shadow.mapSize.set(2048,2048);sun.shadow.camera.left=-12;sun.shadow.camera.right=12;sun.shadow.camera.top=12;sun.shadow.camera.bottom=-12;sun.shadow.normalBias=.045;sun.shadow.bias=-.0001;scene.add(sun);
   let camera:T.PerspectiveCamera|T.OrthographicCamera=new T.PerspectiveCamera(40,1,.1,200);const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.dampingFactor=.12;controls.minDistance=4;controls.maxDistance=35;controls.minZoom=.35;controls.maxZoom=5;controls.maxPolarAngle=Math.PI/2.25;controls.minPolarAngle=.08;
   controls.mouseButtons={LEFT:props.mini?T.MOUSE.PAN:null as unknown as T.MOUSE,MIDDLE:T.MOUSE.PAN,RIGHT:props.mini?T.MOUSE.PAN:null as unknown as T.MOUSE};
   const rightOrbit=props.mini?null:bindRightOrbit(renderer.domElement,controls,{canRotate:()=>latest.current.mode==='3d',message:s=>latest.current.onMessage(s),});
@@ -86,7 +86,7 @@ export default function Scene(props:Props){
    targets.clear();const p=latest.current;if(drag)return;clear(root);clear(annotation);objects.clear();outlines.clear();facades.length=0;
    const rooms=p.mini?p.house.rooms:p.house.rooms.filter(r=>r.id===p.roomId);const warn=warnings(p.house);
    for(const r of rooms){
-    const floor=box(root,r.w,.15,r.d,'#ffffff',r.x,-.095,r.z,.01);floor.userData.id=r.id;const floorMat=floor.material as T.MeshStandardMaterial;floorMat.map=roomTexture(r,'floor');floorMat.roughness=.58;floorMat.bumpMap=floorMat.map;floorMat.bumpScale=.009;
+    const floor=box(root,r.w,.15,r.d,'#ffffff',r.x,-.095,r.z,.01);floor.userData.id=r.id;const floorMat=floor.material as T.MeshStandardMaterial;const woodFloor=(r.floorMaterial??'parquet')==='parquet';floorMat.map=roomTexture(r,'floor');floorMat.roughness=woodFloor?.72:.58;floorMat.bumpMap=floorMat.map;floorMat.bumpScale=woodFloor?.014:.009;
     if(p.realistic&&!p.mini&&p.mode==='3d')box(root,r.w,.04,r.d,'#efeee8',r.x,roomHeight(r)+.02,r.z,.001);
     for(const wall of ['north','south','west','east'] as const){
      const alongX=wall==='north'||wall==='south',len=alongX?r.w:r.d;
@@ -96,7 +96,7 @@ export default function Scene(props:Props){
      const sections=full?wallSections(p.house,r,wall):[{a:-len/2,b:len/2,low:0,high:.12}];
      for(const section of sections){const middle=(section.a+section.b)/2,height=section.high-section.low;
       const panel=box(shell,alongX?section.b-section.a:.12,height,alongX?.12:section.b-section.a,'#ffffff',alongX?r.x+middle:fixed,section.low+height/2,alongX?fixed:r.z+middle,.003);
-      const mat=panel.material as T.MeshStandardMaterial;mat.map=roomTexture(r,'wall');mat.roughness=.9;
+      const mat=panel.material as T.MeshStandardMaterial;const wallMap=roomTexture(r,'wall');mat.map=wallMap;if((r.wallMaterial??'damask')==='damask'){wallMap.repeat.set(Math.max(.01,(section.b-section.a)/2.4),-Math.max(.01,height/2.4));wallMap.offset.set(section.a/2.4,(section.low+height)/2.4);mat.bumpMap=wallMap;mat.bumpScale=.0024;mat.metalness=.05;}mat.roughness=.9;
      }
      // Skirting remains at floor level even when the near wall is cut away.
      const doorHoles=p.house.doors.filter(d=>d.roomId===r.id&&d.wall===wall).map(d=>({a:d.offset-d.width/2,b:d.offset+d.width/2})).sort((a,b)=>a.a-b.a);

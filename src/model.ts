@@ -2,8 +2,8 @@ export type Kind = 'sofa' | 'table' | 'bed' | 'desk' | 'chair' | 'cabinet' | 'pl
 export type Item = {id:string; roomId:string; kind:Kind; name:string; x:number; z:number; w:number; d:number; h:number; rotation:number; color:string; locked:boolean};
 export type Door = {id:string; roomId:string; wall:'north'|'south'|'east'|'west'; offset:number; width:number; height?:number;hinge:'left'|'right'; inward:boolean; open:boolean};
 export type WindowItem = {id:string; roomId:string; wall:'north'|'south'|'east'|'west'; offset:number; width:number;height?:number;sill?:number};
-export const FLOOR_MATERIALS={oak:{name:'浅橡木',color:'#d5bb92'},walnut:{name:'深胡桃木',color:'#8e6348'},stone:{name:'水磨石',color:'#bdc1b9'},tile:{name:'哑光瓷砖',color:'#deddd4'}} as const;
-export const WALL_MATERIALS={ivory:{name:'暖白漆',color:'#f2eee3'},sage:{name:'鼠尾草绿',color:'#b8c8ad'},concrete:{name:'微水泥',color:'#afb5af'},brick:{name:'白色砖墙',color:'#e7e2d6'}} as const;
+export const FLOOR_MATERIALS={parquet:{name:'拼花木地板',color:'#c07a3a'},oak:{name:'浅橡木',color:'#d5bb92'},walnut:{name:'深胡桃木',color:'#8e6348'},stone:{name:'水磨石',color:'#bdc1b9'},tile:{name:'哑光瓷砖',color:'#deddd4'}} as const;
+export const WALL_MATERIALS={damask:{name:'藏蓝枝叶壁纸',color:'#262d4a'},ivory:{name:'暖白漆',color:'#f2eee3'},sage:{name:'鼠尾草绿',color:'#b8c8ad'},concrete:{name:'微水泥',color:'#afb5af'},brick:{name:'白色砖墙',color:'#e7e2d6'}} as const;
 export type Room = {id:string; name:string; x:number; z:number; w:number; d:number; height?:number;color:string;floorMaterial?:keyof typeof FLOOR_MATERIALS;wallMaterial?:keyof typeof WALL_MATERIALS};
 export type House = {version:1; name:string; rooms:Room[]; items:Item[]; doors:Door[]; windows:WindowItem[]};
 export type Tool = 'select'|'box'|'measure';
@@ -21,14 +21,23 @@ export function makeItem(kind:Kind,roomId:string,x:number,z:number):Item {return
 export function initialHouse():House {
  const seed=(kind:Kind,id:string,roomId:string,x:number,z:number,rotation=0):Item=>({id,roomId,kind,...CATALOG[kind],x,z,rotation,locked:false});
  return {version:1,name:'林间公寓',rooms:[
-  {id:'living',name:'客厅',x:0,z:0,w:6,d:6,color:'#e7ddc9'},
-  {id:'bedroom',name:'卧室',x:5.3,z:-1.5,w:4.4,d:3,color:'#e9dfd3'},
-  {id:'study',name:'书房',x:5.3,z:1.6,w:4.4,d:3,color:'#dddcc9'}
+  {id:'living',name:'客厅',x:-1.5,z:-.3,w:5.8,d:4.2,color:'#e7ddc9'},
+  {id:'bedroom',name:'卧室',x:3.4,z:1,w:3.8,d:3.8,color:'#e9dfd3'},
+  {id:'study',name:'书房',x:-.1,z:3.2,w:3,d:2.6,color:'#dddcc9'}
  ],items:[
- seed('sofa','sofa','living',-.65,-1.9),seed('table','table','living',-.6,-.25),seed('chair','chair','living',1.55,-.55,270),seed('cabinet','cabinet','living',-2.55,.2,90),seed('plant','plant','living',-2.3,-2.3),
- seed('bed','bed','bedroom',5.25,-1.45),seed('cabinet','bed-cabinet','bedroom',7.1,-1.4,90),seed('plant','bed-plant','bedroom',3.6,-2.5),
- seed('desk','desk','study',5.3,.6),seed('chair','desk-chair','study',5.3,1.65),seed('cabinet','study-cabinet','study',7.1,1.65,90),seed('plant','study-plant','study',3.6,.55)
- ],doors:[{id:'door-living',roomId:'living',wall:'south',offset:1.8,width:1,hinge:'left',inward:true,open:true},{id:'door-bed',roomId:'bedroom',wall:'west',offset:.6,width:.9,hinge:'left',inward:true,open:false},{id:'door-study',roomId:'study',wall:'west',offset:.6,width:.9,hinge:'right',inward:true,open:true}],windows:[{id:'window-living',roomId:'living',wall:'north',offset:.2,width:2.4},{id:'window-bed',roomId:'bedroom',wall:'north',offset:0,width:1.6},{id:'window-study',roomId:'study',wall:'east',offset:0,width:1.3}]};
+ seed('sofa','sofa','living',-2.75,1.27,180),seed('table','table','living',-2.75,.3),seed('chair','chair','living',-1.65,.3,270),seed('cabinet','cabinet','living',1.129,.9,270),seed('plant','plant','living',1,-1.9),
+ seed('bed','bed','bedroom',3.4,1.76,180),seed('cabinet','bed-cabinet','bedroom',3.75,-.629),seed('plant','bed-plant','bedroom',1.9,2.55),
+ seed('desk','desk','study',0,4.11,180),seed('chair','desk-chair','study',0,3.15),seed('cabinet','study-cabinet','study',1.129,3.6,270),seed('plant','study-plant','study',-1.1,4)
+ ],doors:[
+  {id:'door-living',roomId:'living',wall:'west',offset:-1.2,width:.95,hinge:'left',inward:true,open:true},
+  {id:'door-bed',roomId:'bedroom',wall:'west',offset:-.8,width:.9,hinge:'left',inward:true,open:false},
+  {id:'door-study',roomId:'study',wall:'north',offset:.7,width:.8,hinge:'right',inward:true,open:true}
+ ],windows:[
+  {id:'window-living',roomId:'living',wall:'north',offset:-.7,width:2.8},
+  {id:'window-bed',roomId:'bedroom',wall:'north',offset:0,width:1.6},
+  {id:'window-bed-side',roomId:'bedroom',wall:'east',offset:0,width:1.1},
+  {id:'window-study',roomId:'study',wall:'west',offset:0,width:1.2}
+ ]};
 }
 export function roomOf(h:House,id:string){return h.rooms.find(r=>r.id===id)!;}
 export function alternateHouse():House {
