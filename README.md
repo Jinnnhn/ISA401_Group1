@@ -2,7 +2,7 @@
 
 **An interactive 2D/3D room-layout editor built with React, TypeScript, and Three.js.**
 
-SpaceMate is an ISA401 Human–AI Interaction coursework prototype for arranging furniture, exploring floor plans, and testing spatial editing interactions. It includes an AI-assistant interface placeholder; AI-generated layout suggestions are not connected yet. The current application interface is in Chinese.
+SpaceMate is an ISA401 Human–AI Interaction coursework prototype for arranging furniture, exploring floor plans, and testing spatial editing interactions. The space assistant supports basic text chat with DeepSeek. The current application interface is in Chinese.
 
 ## Getting Started
 
@@ -49,7 +49,15 @@ Open **http://127.0.0.1:5178/**. On Windows, use `npm.cmd` if PowerShell blocks 
 | Interface icons | Lucide React | Consistent toolbar and panel icons. |
 | Testing | Node.js test runner, `node:assert`, and `tsx` | Automated checks for geometry, state isolation, storage compatibility, and interaction rules. |
 
-The current prototype runs entirely in the browser. It does not require a backend, database server, physics engine, or AI API key.
+The layout editor runs in the browser without an API key. For local chat, the Vite development server runs the API route and calls DeepSeek with a server-side key.
+
+### Configure DeepSeek Chat
+
+1. Get an API key from the [DeepSeek platform](https://platform.deepseek.com/api_keys).
+2. Create a `.env.local` file next to `package.json` and set `DEEPSEEK_API_KEY` there. Keep the key in this Git-ignored file; do not add a `VITE_` prefix or commit the key. The default model is `deepseek-flash`.
+3. Start or restart the development server with `npm.cmd run dev` on Windows PowerShell (`npm run dev` elsewhere). Open **http://127.0.0.1:5178/**, send a short message in the bottom space assistant, then send a follow-up question to check that it can use the conversation so far.
+
+The browser sends chat messages to `POST /api/ai/chat`. The server puts the system prompt from `server/chat-prompt.ts` before the conversation and forwards the request to DeepSeek. Edit that file to change the assistant's behavior. A static deployment of `dist/` needs a server route for chat.
 
 ## Interface Layout
 
@@ -88,14 +96,13 @@ The current prototype runs entirely in the browser. It does not require a backen
 - Show the main view's ground-plane coverage, clipped to the active room, as a dashed outline.
 - Use the same floor-plan data as the main canvas so furniture, room dimensions, and materials update together.
 
-### Floating Panels and Assistant Placeholder
+### Floating Panels and Assistant
 
 - The furniture panel, whole-house preview, and space assistant each have a **`>` button** to collapse them and a control to reopen them.
-- The **AI Suggestions** button opens the space assistant.
+- Open the space assistant from the toolbar or the chat panel at the bottom.
 - The assistant floats above the canvas without reducing the canvas size. It has a maximum width of **680 px** and a maximum height of **220 px**.
 - Drag the assistant's title bar to reposition it within the editing area.
-- The assistant includes a request field, a scope selector, example prompts, and a **Generate Suggestions** button.
-- **AI functionality is not implemented:** the button only displays a placeholder notice. It does not submit requests to an AI service or change the layout.
+- Send messages and read DeepSeek's replies in the panel. The assistant does not generate or apply room layouts.
 
 ## Interaction Design
 
@@ -170,7 +177,7 @@ Hinge labels follow each wall's local coordinate direction. Door-opening checks 
 src/
   App.tsx             Application state, property panels, history, and persistence
   Scene.tsx           Three.js rendering, picking, dragging, measurement, and maps
-  AssistantPanel.tsx  Floating assistant interface placeholder
+  AssistantPanel.tsx  Floating chat interface
   SurfacePanel.tsx    Room material selection interface
   model.ts            Data types, sample plans, geometry, and validation
   placement.ts        Drag previews, single-object yielding, and safe duplication
@@ -183,6 +190,8 @@ src/
   model.test.ts       Automated tests
   style.css           Interface styling and responsive layout
   main.tsx            React entry point
+server/
+  chat-prompt.ts      System prompt for the space assistant
 screenshots/          Prototype screenshots
 ```
 
@@ -195,7 +204,7 @@ screenshots/          Prototype screenshots
 - Marquee selection uses projected furniture center points. Multi-object rotation turns each object around its own center.
 - Undo/redo histories are separate per floor plan during the current session and are not restored after a page reload.
 - Layouts are persisted only when **Save Layout** or `Ctrl + S` is used. Saves stay in the current browser; there is no cloud account or synchronization.
-- AI integration, automatic layout optimization, and formal user studies remain future work.
+- AI-generated layouts, automatic layout optimization, and formal user studies remain future work.
 
 The latest automated suite contains **32 tests**. Earlier browser-check details are recorded in [the verification log](验收记录.md); they do not constitute formal user-study results or user acceptance.
 
@@ -209,7 +218,7 @@ The latest automated suite contains **32 tests**. Earlier browser-check details 
 
 ## 布局与交互优化
 
-- 默认隐藏右侧属性和低高度窗口的小地图，AI 占位收为紧凑输入条。选择家具时打开属性；点击空白或 Esc 可收起。撤销重做合并到顶部，工具栏、地图、视图控制和助手采用独立停靠区域。
+- 默认隐藏右侧属性和低高度窗口的小地图，空间助手收为紧凑输入条。选择家具时打开属性；点击空白或 Esc 可收起。撤销重做合并到顶部，工具栏、地图、视图控制和助手采用独立停靠区域。
 - 相机投影按未遮挡区域居中，“适配当前房间”依据实际可见面积取景。每个房间的编辑视角与室内预览视角分别记忆。
 - 室内预览只读：隐藏编辑工具，阻止 Delete、R、复制、撤销等编辑快捷键。退出后恢复原编辑模式、选择、面板状态和视角。
 - 选择工具直接拖家具、空白处框选；专用框选工具可从任意位置开始。单击和拖动以 5 px 阈值区分。锁定家具拖动不会误触框选。
@@ -217,4 +226,4 @@ The latest automated suite contains **32 tests**. Earlier browser-check details 
 - 旋转、替换、坐标与尺寸输入不接受新增的家具重叠或挡门冲突。复制会寻找附近有效空位，找不到则保持原布局。已有存档中的冲突不会静默删除，仍可手动修正。
 - Esc 优先处理拖动、视角手势、测量，再处理当前弹窗、室内预览、展开助手、工具模式，最后清除选择。数值输入中的 Esc 仅恢复当前字段。
 - 非法数值保留输入并显示原因，不会静默恢复旧值。未保存改动在刷新或关闭时触发浏览器提醒；房间和户型切换仍保留会话数据，不反复询问。
-- AI 仍是明确标注的未接入占位界面，按钮禁用；本次优化不包含模型服务。
+- 空间助手支持 DeepSeek 基础聊天。系统提示词在 `server/chat-prompt.ts`，可修改角色、语气和回答方式。
