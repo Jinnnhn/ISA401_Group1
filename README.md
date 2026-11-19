@@ -2,7 +2,7 @@
 
 **An interactive 2D/3D room-layout editor built with React, TypeScript, and Three.js.**
 
-SpaceMate is an ISA401 Human–AI Interaction coursework prototype for arranging furniture, exploring floor plans, and testing spatial editing interactions. The space assistant supports basic text chat with DeepSeek. The current application interface is in Chinese.
+SpaceMate is an ISA401 Human–AI Interaction coursework prototype for arranging furniture, exploring floor plans, and testing spatial editing interactions. The space assistant uses DeepSeek to interpret requests about the current room and proposes moves users can preview and apply. The current application interface is in Chinese.
 
 ## Getting Started
 
@@ -57,7 +57,11 @@ The layout editor runs in the browser without an API key. For local chat, the Vi
 2. Create a `.env.local` file next to `package.json` and set `DEEPSEEK_API_KEY` there. Keep the key in this Git-ignored file; do not add a `VITE_` prefix or commit the key. The default model is `deepseek-flash`.
 3. Start or restart the development server with `npm.cmd run dev` on Windows PowerShell (`npm run dev` elsewhere). Open **http://127.0.0.1:5178/**, send a short message in the bottom space assistant, then send a follow-up question to check that it can use the conversation so far.
 
-The browser sends chat messages to `POST /api/ai/chat`. The server puts the system prompt from `server/chat-prompt.ts` before the conversation and forwards the request to DeepSeek. Edit that file to change the assistant's behavior. A static deployment of `dist/` needs a server route for chat.
+The browser sends recent messages and structured current-room data to `POST /api/ai/chat`, including dimensions, furniture, doors, windows, selection, locks and layout preferences. DeepSeek interprets the request. The application computes and validates one move or a set of moves against room boundaries, door sweeps and occupied furniture footprints. For a whole-room request, it also evaluates whether keeping the current layout makes sense. A whole-room preview can be applied or undone as a single edit. A static deployment of `dist/` needs a server route for chat.
+
+Opinion and comparison questions use the recent conversation and the current layout, including an active suggestion when it is being discussed. Concrete move requests can produce a preview after the editor validates the target and placement. Conversation-spacing suggestions use the current seating arrangement as a reference and look for small moves on the original side of neighboring furniture.
+
+For door-swing checks, the assistant uses the editor's collision calculation. A request to move an obstruction searches for the closest sampled position that fits and clears doorway swings, then reports the distance before the user previews it. A check of the configured door width uses that single opening measurement. Continuous clearance along a route requires separate measurement.
 
 ## Interface Layout
 
@@ -102,7 +106,8 @@ The browser sends chat messages to `POST /api/ai/chat`. The server puts the syst
 - Open the space assistant from the toolbar or the chat panel at the bottom.
 - The assistant floats above the canvas without reducing the canvas size. It has a maximum width of **680 px** and a maximum height of **220 px**.
 - Drag the assistant's title bar to reposition it within the editing area.
-- Send messages and read DeepSeek's replies in the panel. The assistant does not generate or apply room layouts.
+- Ask for more central space, space around a door, a conversation arrangement, or a move toward a specific location. Use the preference menu and an optional text constraint. The search covers positions sampled in the current room and handles one furniture move per suggestion.
+- If several pieces of furniture share a name, choose the intended object in the canvas or in the suggestion card. Preview shows the original footprint and proposed position. Apply is an explicit action. Dismissing the card cancels the preview, and a layout change requires regenerating the suggestion.
 
 ## Interaction Design
 
@@ -178,6 +183,7 @@ src/
   App.tsx             Application state, property panels, history, and persistence
   Scene.tsx           Three.js rendering, picking, dragging, measurement, and maps
   AssistantPanel.tsx  Floating chat interface
+  layoutAdvice.ts     Room context, furniture identity and validated suggestion search
   SurfacePanel.tsx    Room material selection interface
   model.ts            Data types, sample plans, geometry, and validation
   placement.ts        Drag previews, single-object yielding, and safe duplication
@@ -226,4 +232,4 @@ The latest automated suite contains **32 tests**. Earlier browser-check details 
 - 旋转、替换、坐标与尺寸输入不接受新增的家具重叠或挡门冲突。复制会寻找附近有效空位，找不到则保持原布局。已有存档中的冲突不会静默删除，仍可手动修正。
 - Esc 优先处理拖动、视角手势、测量，再处理当前弹窗、室内预览、展开助手、工具模式，最后清除选择。数值输入中的 Esc 仅恢复当前字段。
 - 非法数值保留输入并显示原因，不会静默恢复旧值。未保存改动在刷新或关闭时触发浏览器提醒；房间和户型切换仍保留会话数据，不反复询问。
-- 空间助手支持 DeepSeek 基础聊天。系统提示词在 `server/chat-prompt.ts`，可修改角色、语气和回答方式。
+- 空间助手支持单件调整与当前房间的多件家具布局建议，包括同名消歧、布局偏好、理由和影响、预览、应用和撤销。整套建议作为一次编辑操作。整间房方案检查家具占地、门扇开启范围、座椅正面的可用空间和茶几位置，并按户型估计完全开门后是否有约 60 cm 宽的路线到房间中央。中央留白用于比较方案。系统提示词位于 `server/chat-prompt.ts`。

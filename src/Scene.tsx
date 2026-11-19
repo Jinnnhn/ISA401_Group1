@@ -2,7 +2,7 @@ import {useEffect,useRef,useState} from 'react';
 import * as T from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js';
-import {copy,doorFrame,doorPoint,doorSweep,moveItems,roomOf,snap,warnings,type House,type Item,type Room,type Tool} from './model';
+import {copy,corners,doorFrame,doorPoint,doorSweep,moveItems,roomOf,snap,warnings,type House,type Item,type Room,type Tool} from './model';
 import {bindRightOrbit} from './rightOrbit';
 import {furnitureDragAction} from './selection';
 import {roomTexture} from './materials';
@@ -10,8 +10,9 @@ import {furniture as realFurniture,loadFurnitureAssets} from './furniture';
 import {roomHeight,doorHeight,windowHeight,windowSill,wallSections,type Wall} from './architecture';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import {previewMove} from './placement';
+import {itemLabel,type Move} from './layoutAdvice';
 
-type Props={house:House;draft?:House|null;insets?:{left:number;right:number;top:number;bottom:number};blocked?:boolean;onBusy?:(busy:boolean)=>void;roomId:string;mode:'2d'|'3d';selected:string[];tool:Tool;grid:boolean;measure:boolean;resetKey:number;realistic?:boolean;mini?:boolean;view?:[number,number][];onSelect:(ids:string[])=>void;onCommit:(h:House)=>boolean;onMessage:(s:string)=>void;onPreview?:(h:House|null)=>void;onView?:(p:[number,number][])=>void;onRoom?:(id:string)=>void};
+type Props={house:House;draft?:House|null;advicePreview?:readonly Move[]|null;insets?:{left:number;right:number;top:number;bottom:number};blocked?:boolean;onBusy?:(busy:boolean)=>void;roomId:string;mode:'2d'|'3d';selected:string[];tool:Tool;grid:boolean;measure:boolean;resetKey:number;realistic?:boolean;mini?:boolean;view?:[number,number][];onSelect:(ids:string[])=>void;onCommit:(h:House)=>boolean;onMessage:(s:string)=>void;onPreview?:(h:House|null)=>void;onView?:(p:[number,number][])=>void;onRoom?:(id:string)=>void};
 type Engine={rebuild:()=>void;reset:()=>void;outlineView:()=>void;preview:(h:House)=>void;reframe:()=>void};
 function dispose(root:T.Object3D){const maps=new Set<T.Texture>();root.traverse(o=>{if(o instanceof T.Mesh||o instanceof T.Line||o instanceof T.Sprite){if('geometry'in o)o.geometry.dispose();for(const m of Array.isArray(o.material)?o.material:[o.material]){for(const value of Object.values(m))if(value instanceof T.Texture)maps.add(value);m.dispose();}}});maps.forEach(t=>t.dispose());}
 function box(parent:T.Object3D,w:number,h:number,d:number,color:string,x=0,y=0,z=0,round=.025){
@@ -84,7 +85,8 @@ export default function Scene(props:Props){
   function outlineView(){clear(viewRoot);const p=latest.current;if(!p.mini||!p.view?.length)return;const outline=line(viewRoot,[...p.view,p.view[0]].map(([x,z])=>new T.Vector3(x,.12,z)),'#557d5f',true);(outline.material as T.LineDashedMaterial).depthTest=false;outline.renderOrder=50;}
   function rebuild(){
    targets.clear();const p=latest.current;if(drag)return;clear(root);clear(annotation);objects.clear();outlines.clear();facades.length=0;
-   const rooms=p.mini?p.house.rooms:p.house.rooms.filter(r=>r.id===p.roomId);const warn=warnings(p.house);
+   const rooms=p.mini?p.house.rooms:p.house.rooms.filter(r=>r.id===p.roomId);const warn=warnings(!p.mini&&p.advicePreview&&p.draft?p.draft:p.house);
+   const previewIds=new Set(p.advicePreview?.map(move=>move.itemId));
    for(const r of rooms){
     const floor=box(root,r.w,.15,r.d,'#ffffff',r.x,-.095,r.z,.01);floor.userData.id=r.id;const floorMat=floor.material as T.MeshStandardMaterial;const woodFloor=(r.floorMaterial??'parquet')==='parquet';floorMat.map=roomTexture(r,'floor');floorMat.roughness=woodFloor?.72:.58;floorMat.bumpMap=floorMat.map;floorMat.bumpScale=woodFloor?.014:.009;
     if(p.realistic&&!p.mini&&p.mode==='3d')box(root,r.w,.04,r.d,'#efeee8',r.x,roomHeight(r)+.02,r.z,.001);
@@ -111,7 +113,7 @@ export default function Scene(props:Props){
     const color=warn[f.id]?'#cc7457':p.selected.includes(f.id)?'#376653':f.locked?'#ab9371':'#a0b296';
     const height=f.kind==='desk'?f.h+.45:f.kind==='bed'?1:f.h+.16;
     const edge=new T.LineSegments(new T.EdgesGeometry(new T.BoxGeometry(f.w+.09,height,f.d+.09)),new T.LineDashedMaterial({color,dashSize:.11,gapSize:.065,depthTest:false,transparent:true,opacity:.9}));edge.computeLineDistances();edge.position.y=height/2;edge.renderOrder=20;g.add(edge);edge.visible=!p.mini&&!p.realistic&&(p.selected.includes(f.id)||!!warn[f.id]||f.locked);outlines.set(f.id,edge);
-    if(!p.mini&&!p.realistic&&p.selected.includes(f.id)){label(annotation,`${f.name}${f.locked?' · 已锁定':''}  ${f.w} × ${f.d} m`,f.x,f.h+.4,f.z,'#376653');}
+    if(!p.mini&&!p.realistic&&p.selected.includes(f.id)&&!previewIds.has(f.id)){label(annotation,`${itemLabel(p.house.items.filter(item=>item.roomId===p.roomId),f.id)}${f.locked?' · 已锁定':''}  ${f.w} × ${f.d} m`,f.x,f.h+.4,f.z,'#376653');}
    }
    for(const d of p.house.doors.filter(d=>rooms.some(r=>r.id===d.roomId))){
     const r=roomOf(p.house,d.roomId),f=doorFrame(p.house,d),g=new T.Group();g.userData.id=d.id;root.add(g);
@@ -142,6 +144,25 @@ export default function Scene(props:Props){
     if(p.selected.includes(w.id)&&!p.mini&&!p.realistic)label(annotation,`窗户 · ${w.width} × ${windowHeight(w)} m`,x,y+h/2+.2,z,'#397c78');
    }
    if(activeRoom!==p.roomId||activeMode!==p.mode||activeRealistic!==!!p.realistic)reset();outlineView();if(p.mini&&p.draft)drawPreview(p.draft);
+   if(!p.mini&&p.advicePreview&&!p.realistic)for(const move of p.advicePreview){
+    const item=p.house.items.find(value=>value.id===move.itemId&&value.roomId===p.roomId);
+    if(item){
+     const target={...item,x:move.x,z:move.z};
+     const outline=(f:Item,color:string,dashed:boolean)=>{
+      const points=corners(f);points.push(points[0]);
+      const marker=line(annotation,points.map(([x,z])=>new T.Vector3(x,.075,z)),color,dashed);
+      (marker.material as T.LineBasicMaterial).depthTest=false;marker.renderOrder=25;
+     };
+     outline(item,'#a7662f',true);outline(target,'#167755',false);
+     const connector=line(annotation,[new T.Vector3(item.x,.075,item.z),new T.Vector3(move.x,.075,move.z)],'#87644b',true);
+     (connector.material as T.LineBasicMaterial).depthTest=false;connector.renderOrder=24;
+     objects.get(item.id)?.position.set(move.x,0,move.z);
+     const edge=outlines.get(item.id);if(edge){edge.visible=true;(edge.material as T.LineBasicMaterial).color.set('#167755');}
+     const name=itemLabel(p.house.items.filter(value=>value.roomId===p.roomId),item.id);
+     label(annotation,p.advicePreview.length===1?'原位置':`原位置 · ${name}`,item.x,.2,item.z,'#955223',.85).material.toneMapped=false;
+     label(annotation,`建议位置 · ${name}`,move.x,item.h+.4,move.z,'#116043').material.toneMapped=false;
+    }
+   }
   }
   function emitView(force=false){const p=latest.current;if(p.mini||!p.onView||!force&&performance.now()-lastView<180)return;lastView=performance.now();let points:[number,number][]=[];
    // Project the editing area that is not covered by the property panel onto the floor.
@@ -156,7 +177,7 @@ export default function Scene(props:Props){
   controls.addEventListener('change',()=>emitView());
   function drawPreview(h:House,yieldId?:string){targets.clear();const warn=warnings(h);for(const f of h.items){const g=objects.get(f.id);if(!g)continue;if(f.id===yieldId)targets.set(f.id,new T.Vector3(f.x,0,f.z));else g.position.set(f.x,0,f.z);g.rotation.y=f.rotation*Math.PI/180;const edge=outlines.get(f.id);if(edge){edge.visible=!latest.current.mini&&!latest.current.realistic&&(latest.current.selected.includes(f.id)||!!warn[f.id]||!!drag?.ids.includes(f.id)||f.locked);(edge.material as T.LineBasicMaterial).color.set(warn[f.id]?'#cc7457':'#376653');}}}
   function down(e:PointerEvent){
-   if(e.button!==0||drag||latest.current.blocked||latest.current.realistic&&!latest.current.mini)return;const p=latest.current,result=hit(e);if(!result.point)return;
+   if(e.button!==0||drag||latest.current.blocked||latest.current.realistic&&!latest.current.mini||latest.current.advicePreview)return;const p=latest.current,result=hit(e);if(!result.point)return;
    if(p.tool==='measure'&&!p.mini){clear(measureRoot);if(!measureStart){measureStart=result.point.clone();p.onMessage('测量：再点击一个位置，查看两点间距离。');}else{const end=result.point.clone();line(measureRoot,[measureStart.clone().setY(.12),end.clone().setY(.12)],'#b88045');label(measureRoot,`${measureStart.distanceTo(end).toFixed(2)} m`,(measureStart.x+end.x)/2,.35,(measureStart.z+end.z)/2,'#9e6a35');measureStart=null;p.onMessage('测量完成；继续点击可开始下一次测量。');}return;}
    const item=p.house.items.find(f=>f.id===result.id),moving=!p.mini&&furnitureDragAction(item,p.selected,p.tool,e.shiftKey)==='move';
    if(!p.mini&&p.tool==='select'&&item?.locked&&!e.shiftKey){if(!p.selected.includes(item.id))p.onSelect([item.id]);p.onMessage('家具已锁定，请先解锁；拖动不会启动框选。');return;}
@@ -168,7 +189,7 @@ export default function Scene(props:Props){
   function move(e:PointerEvent){
    if(rightOrbit?.isActive())return;
    const p=latest.current;
-   if(!drag){if(p.mini||p.realistic)return;const {id}=hit(e);if(hover!==id){const prev=outlines.get(hover);if(prev&&!p.selected.includes(hover)&&!p.house.items.find(f=>f.id===hover)?.locked&&!warnings(p.house)[hover])prev.visible=false;hover=id;const next=outlines.get(id);if(next)next.visible=true;}const f=p.house.items.find(f=>f.id===id);renderer.domElement.style.cursor=p.tool==='measure'||p.tool==='box'?'crosshair':furnitureDragAction(f,p.selected,p.tool)==='move'?'grab':id?'pointer':'default';return;}
+   if(!drag){if(p.mini||p.realistic||p.advicePreview)return;const {id}=hit(e);if(hover!==id){const prev=outlines.get(hover);if(prev&&!p.selected.includes(hover)&&!p.house.items.find(f=>f.id===hover)?.locked&&!warnings(p.house)[hover])prev.visible=false;hover=id;const next=outlines.get(id);if(next)next.visible=true;}const f=p.house.items.find(f=>f.id===id);renderer.domElement.style.cursor=p.tool==='measure'||p.tool==='box'?'crosshair':furnitureDragAction(f,p.selected,p.tool)==='move'?'grab':id?'pointer':'default';return;}
    if(e.pointerId!==drag.pointerId)return;
    const dx=e.clientX-drag.startX,dy=e.clientY-drag.startY;if(Math.hypot(dx,dy)>5)drag.moved=true;if(!drag.moved||p.mini)return;
    const item=drag.base.items.find(f=>f.id===drag!.id);
@@ -219,7 +240,7 @@ export default function Scene(props:Props){
   loadFurnitureAssets().then(()=>{if(!disposed){setModelStatus('ready');rebuild();}}).catch(()=>{if(!disposed){setModelStatus('partial');rebuild();}});
   return()=>{disposed=true;envTarget.dispose();engine.current=null;cancelAnimationFrame(frame);resize.disconnect();window.removeEventListener('keydown',key,true);window.removeEventListener('blur',cancel);rightOrbit?.dispose();controls.dispose();dispose(scene);renderer.dispose();renderer.domElement.remove();rect.remove();};
  },[]);
- useEffect(()=>{engine.current?.rebuild();},[props.house,props.roomId,props.mode,props.mini?null:props.selected,props.mini?false:props.grid,props.mini?false:props.measure,props.realistic]);
+ useEffect(()=>{engine.current?.rebuild();},[props.house,props.roomId,props.mode,props.mini?null:props.selected,props.mini?false:props.grid,props.mini?false:props.measure,props.realistic,props.advicePreview]);
  useEffect(()=>{engine.current?.reset();},[props.resetKey]);
  useEffect(()=>{engine.current?.reframe();},[props.insets]);
  useEffect(()=>{engine.current?.outlineView();},[props.view]);

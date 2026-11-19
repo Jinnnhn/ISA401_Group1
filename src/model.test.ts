@@ -1,12 +1,402 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {initialHouse,warnings,copy,corners,polygonOverlap,doorFrame,doorPoint,moveItems,validHouse,itemInsideRoom,roomOf,constrainHouse,WALL_INSET} from './model';
+import {alternateHouse,initialHouse,warnings,copy,corners,polygonOverlap,doorFrame,doorPoint,moveItems,validHouse,itemInsideRoom,roomOf,constrainHouse,WALL_INSET} from './model';
 import {PerspectiveCamera,Vector3} from 'three';
 import {bindRightOrbit} from './rightOrbit';
 import {defaultWorkspace,restoreWorkspace} from './projects';
 import {furnitureDragAction} from './selection';
 import {roomHeight,doorHeight,windowHeight,windowSill,wallSections} from './architecture';
 import {previewMove,addedConflicts,placeCopies} from './placement';
+import {applyLayoutChanges,applyLayoutMove,exactRelativeMove,explicitTargets,findLayoutMoves,itemLabel,makeLayoutContext,makeLayoutProposal,measurePreviousRoomSuggestion,measurePreviousSuggestion,protectedIds,readLayoutContext,wallPlacementAdvice,wallReference} from './layoutAdvice';
+import {currentDoorStatus,doorOpeningAdvice} from './doorAdvice';
+import {executeLayoutIntent} from '../server/layout-intent';
+import {optimizeRoom,roomProposal} from './roomLayout';
+import {assessRoomUse,frontClearance,sofaClearance} from './roomUsability';
+
+test('中央腾空也会拒绝朝墙且难以入座的沙发落点',()=>{
+ const house=initialHouse(),room=roomOf(house,'living');
+ const sofa=house.items.find(item=>item.id==='sofa')!,table=house.items.find(item=>item.id==='table')!;
+ house.items=[sofa,table];
+ Object.assign(sofa,{x:room.x,z:room.z+.65,rotation:180});
+ Object.assign(table,{x:room.x,z:room.z-.75});
+ const context=makeLayoutContext(house,'living',[],'balanced','');
+ const bad=[{itemId:sofa.id,x:room.x,z:room.z-1.46},{itemId:table.id,x:room.x-1.94,z:room.z+.3}];
+ assert.ok('house' in applyLayoutChanges(house,'living',bad));
+ assert.ok(frontClearance(sofa,room,house.items)>=sofaClearance);
+ const rejected=roomProposal(context,'center',bad,[]);
+ assert.equal(rejected.kind,'text');
+ assert.match(rejected.reply,/缩小皮木框架沙发前方的可用空间/);
+ const result=optimizeRoom(context,'center',[]);
+ if(result.kind==='roomProposal'){
+  const applied=applyLayoutChanges(house,room.id,result.changes);
+  assert.ok('house' in applied);
+  const use=assessRoomUse(applied.house,room);
+  assert.ok(use.seats[0].depth>=sofaClearance-.01);
+  assert.ok(use.table&&use.table.penalty<=.12);
+ }
+});
+
+test('茶几推到沙发侧面，即使入座宽裕也不能作为中央留白方案',()=>{
+ const house=initialHouse(),room=roomOf(house,'living');
+ const sofa=house.items.find(item=>item.id==='sofa')!,table=house.items.find(item=>item.id==='table')!;
+ house.items=[sofa,table];
+ Object.assign(sofa,{x:room.x-0.32,z:room.z+1.06,rotation:180});
+ Object.assign(table,{x:sofa.x,z:room.z-.26});
+ const context=makeLayoutContext(house,'living',[],'balanced','');
+ const changes=[{itemId:table.id,x:room.x+2.09,z:room.z+1.06}];
+ assert.ok('house' in applyLayoutChanges(house,room.id,changes));
+ const rejected=roomProposal(context,'balanced',changes,[]);
+ assert.equal(rejected.kind,'text');
+ assert.match(rejected.reply,/茶几偏离沙发正面/);
+});
+
+test('进门后遇到狭窄瓶颈会拒绝方案，门扇仍可完全打开',()=>{
+ const house=initialHouse(),room=roomOf(house,'living');
+ Object.assign(room,{w:4,d:3});
+ const door=house.doors.find(item=>item.id==='door-living')!;
+ Object.assign(door,{offset:0,inward:false});
+ house.doors=[door];
+ const cabinet=house.items.find(item=>item.id==='cabinet')!;
+ house.items=[cabinet];
+ Object.assign(cabinet,{x:room.x+1.45,z:room.z,w:.35,d:2.46,rotation:0});
+ const before=assessRoomUse(house,room);
+ assert.equal(before.passages[0].reachable,true);
+ const desired=[{itemId:cabinet.id,x:room.x-1.05,z:room.z}];
+ const geometric=applyLayoutChanges(house,room.id,desired);
+ assert.ok('house' in geometric);
+ assert.equal(assessRoomUse(geometric.house,room).passages[0].reachable,false);
+ const context=makeLayoutContext(house,'living',[],'passage','');
+ assert.match(roomProposal(context,'door',desired,[]).reply,/缩窄.*通路/);
+ const blockedContext=makeLayoutContext(geometric.house,'living',[],'passage','');
+ const repair=optimizeRoom(blockedContext,'door',[]);
+ assert.equal(repair.kind,'roomProposal');
+ const repaired=applyLayoutChanges(geometric.house,room.id,repair.changes);
+ assert.ok('house' in repaired);
+ assert.equal(assessRoomUse(repaired.house,room).passages[0].reachable,true);
+ assert.match(repair.reply,/从门口到房间中央有至少\s*60\s*厘米\s*宽的通路/);
+});
+
+test('整间客厅一次处理挡门和家具重叠，计划稳定，保留锁定家具及其他房间',()=>{
+ const house=initialHouse();
+ const items=Object.fromEntries(house.items.map(item=>[item.id,item]));
+ [items.plant.x,items.plant.z]=doorPoint(house,house.doors[0],45,.60);
+ Object.assign(items.chair,{x:items.table.x,z:items.table.z});
+ items.sofa.locked=true;
+ const baseline=copy(house);
+ const context=makeLayoutContext(house,'living',['chair'],'balanced','');
+ const request={mode:'room',reviewOnly:false,objective:'balanced',preserveIds:['cabinet']};
+ const result=executeLayoutIntent(request,context,'这里摆得挺乱，帮我整个房间重新排一下。');
+ assert.equal(result.kind,'roomProposal');
+ assert.ok(result.changes.length>=2);
+ assert.deepEqual(executeLayoutIntent(request,context,'麻烦让这一屋摆放得更合理一些。'),result);
+ assert.deepEqual(house,baseline);
+ assert.equal(result.explanations.length,result.changes.length);
+ assert.ok(result.explanations.every(detail=>detail.reason&&detail.impact));
+ const after=applyLayoutChanges(house,'living',result.changes,result.preserveIds);
+ assert.ok('house' in after);
+ assert.ok(!after.house.items.filter(item=>item.roomId==='living').some(item=>warnings(after.house)[item.id]));
+ assert.deepEqual(after.house.items.filter(item=>item.roomId!=='living'||item.id==='sofa'||item.id==='cabinet'),
+  house.items.filter(item=>item.roomId!=='living'||item.id==='sofa'||item.id==='cabinet'));
+ const previous={changes:result.changes,objective:result.objective,preserveIds:result.preserveIds};
+ const followup=makeLayoutContext(house,'living',[],'balanced','',undefined,undefined,previous);
+ assert.ok(readLayoutContext(followup));
+ assert.deepEqual(executeLayoutIntent({mode:'repeat'},followup,'照刚才那套方案预览'),result);
+ items[result.changes[0].itemId].locked=true;
+ assert.ok(!readLayoutContext(makeLayoutContext(house,'living',[],'balanced','',undefined,undefined,previous)));
+});
+
+test('整屋建议区分保留现状、只评估和受锁定约束无法解决的冲突',()=>{
+ const house=initialHouse();
+ house.items=house.items.filter(item=>item.roomId!=='living'||item.id==='sofa');
+ const context=()=>makeLayoutContext(house,'living',[],'balanced','');
+ const request={mode:'room',reviewOnly:false,objective:'balanced'};
+ const clean=executeLayoutIntent(request,context(),'如果现在摆得合适就保留。');
+ assert.equal(clean.kind,'text');
+ assert.match(clean.reply,/建议保留现状.*你还想/);
+ const sofa=house.items.find(item=>item.id==='sofa')!;
+ const room=house.rooms.find(item=>item.id==='living')!;
+ Object.assign(sofa,{x:room.x,z:room.z});
+ const evaluation=executeLayoutIntent({...request,reviewOnly:true},context(),'先只评价当前布置。');
+ assert.equal(evaluation.kind,'text');
+ assert.match(evaluation.reply,/可行调整/);
+ const clearCenter=executeLayoutIntent(request,context(),'帮我改得开敞一点。');
+ assert.equal(clearCenter.kind,'roomProposal');
+ assert.match(clearCenter.reply,/中央区域的家具占用估计/);
+ Object.assign(sofa,{locked:true});
+ [sofa.x,sofa.z]=doorPoint(house,house.doors[0],40,.4);
+ const blocked=executeLayoutIntent(request,context(),'只有未锁定的家具可以调整。');
+ assert.equal(blocked.kind,'text');
+ assert.match(blocked.reply,/皮木框架沙发需要保持原位/);
+ assert.doesNotMatch(blocked.reply,/建议保留现状/);
+});
+
+test('整套落点按最终占地校验，家具可交换位置，无效改动不会部分生效',()=>{
+ const house=initialHouse();
+ const first=house.items.find(item=>item.id==='chair')!;
+ const second={...first,id:'other-chair',x:-.6,z:-1.25};
+ house.items.push(second);
+ const initial=copy(house);
+ const changes=[{itemId:first.id,x:second.x,z:second.z},{itemId:second.id,x:first.x,z:first.z}];
+ assert.ok('error' in applyLayoutMove(house,'living',changes[0]));
+ const result=applyLayoutChanges(house,'living',changes);
+ assert.ok('house' in result);
+ assert.ok(result.house.items.some(item=>item.id===first.id&&item.x===second.x&&item.z===second.z));
+ assert.ok(result.house.items.some(item=>item.id===second.id&&item.x===first.x&&item.z===first.z));
+ const measurements=measurePreviousRoomSuggestion(makeLayoutContext(house,'living',[],'balanced','',undefined,undefined,
+  {changes,objective:'balanced',preserveIds:[]}));
+ const gap=measurements?.find(value=>value.itemId===first.id)?.nearbyGaps.find(value=>value.itemId===second.id);
+ assert.ok(gap&&gap.beforeCm>0&&gap.beforeCm===gap.afterCm);
+ assert.ok('error' in applyLayoutChanges(house,'living',changes,[first.id]));
+ assert.ok('error' in applyLayoutChanges(house,'living',[...changes,changes[0]]));
+ assert.ok('error' in applyLayoutChanges(house,'living',[changes[0],{...changes[1],x:100}]));
+ assert.deepEqual(house,initial);
+});
+
+function bedroomWithBlockedDoor(){
+ const house=initialHouse();
+ const door=house.doors.find(item=>item.id==='door-bed')!;
+ const cabinet=house.items.find(item=>item.id==='bed-cabinet')!;
+ [cabinet.x,cabinet.z]=doorPoint(house,door,45,.52);
+ cabinet.rotation=90;
+ return {house,door,cabinet,context:()=>makeLayoutContext(house,'bedroom',[],'balanced','')};
+}
+
+test('问门会不会碰到边柜时，与画布使用同一个开门范围，关着的门也检查',()=>{
+ const {house,door,cabinet,context}=bedroomWithBlockedDoor();
+ assert.deepEqual(currentDoorStatus(context())[0].blockers.map(item=>item.id),[cabinet.id]);
+ assert.match(warnings(house)[door.id][0],/收纳边柜/);
+ const question='卧室门打开会不会磕到边柜？只检查，别移动。';
+ assert.match(doorOpeningAdvice(context(),question)?.reply??'',/西墙房门的开启范围被收纳边柜占用/);
+ const intent={mode:'door',action:'check',itemId:cabinet.id,minimumWidth:.90};
+ const onlyCheck=executeLayoutIntent(intent,context(),question);
+ assert.match(onlyCheck.reply,/开启范围被收纳边柜占用/);
+ assert.doesNotMatch(onlyCheck.reply,/90 厘米/);
+ assert.match(executeLayoutIntent(intent,context(),'卧室门口能不能保证 90 厘米净宽？').reply,/90 厘米.*连续通行宽度仍需测量/);
+ assert.equal(doorOpeningAdvice(context(),question)?.kind,'text');
+ door.open=true;
+ assert.match(doorOpeningAdvice(context(),question)?.reply??'',/被收纳边柜占用/);
+ door.inward=false;
+ assert.equal(warnings(house)[door.id],undefined);
+ assert.match(doorOpeningAdvice(context(),question)?.reply??'',/没有占用/);
+});
+
+test('挡门边柜预览选取近处合法位置，遵守锁定、保留及最大移动距离',()=>{
+ const {house,door,cabinet,context}=bedroomWithBlockedDoor();
+ const initial=copy(house);
+ const question='进卧室时门会撞到边柜，帮我挪开，尽量少挪。';
+ const advice=doorOpeningAdvice(context(),question);
+ assert.ok(advice?.kind==='proposal');
+ assert.equal(advice.moves.length,1);
+ const move=advice.moves[0];
+ assert.equal(move.itemId,cabinet.id);
+ const distance=Math.hypot(move.x-cabinet.x,move.z-cabinet.z);
+ assert.ok(distance>1.1 && distance<1.3);
+ assert.match(advice.reply,/平移约 1\.\d{2} 米/);
+ assert.match(advice.explanations[0].reason,/占用西墙房门的开启范围/);
+ assert.match(advice.explanations[0].impact,/其他家具保持原位.*开启范围|其他家具保持原位.*开门范围/);
+ assert.deepEqual(house,initial);
+ const placed=applyLayoutMove(house,'bedroom',move);
+ assert.ok('house' in placed);
+ assert.equal(warnings(placed.house)[door.id],undefined);
+ assert.deepEqual(placed.house.items.filter(item=>item.id!==cabinet.id),house.items.filter(item=>item.id!==cabinet.id));
+ const limited=doorOpeningAdvice(context(),'帮我把挡住卧室门的边柜挪开，最多挪30厘米。');
+ assert.equal(limited?.kind,'text');
+ assert.match(limited.reply,/超过你设的 30 厘米/);
+ const keptBed=doorOpeningAdvice(context(),'不要移动床，卧室门会撞到边柜，帮我把边柜挪开。');
+ assert.equal(keptBed?.kind,'proposal');
+ const checkWithoutMoving=doorOpeningAdvice(context(),'卧室门会不会碰柜子？不要把边柜挪开。');
+ assert.equal(checkWithoutMoving?.kind,'text');
+ assert.match(checkWithoutMoving.reply,/被收纳边柜占用/);
+ const preserved=doorOpeningAdvice({...context(),custom:'边柜保持原位'},question);
+ assert.equal(preserved?.kind,'text');
+ assert.match(preserved.reply,/需保持原位/);
+ cabinet.locked=true;
+ const locked=doorOpeningAdvice(context(),question);
+ assert.equal(locked?.kind,'text');
+ assert.match(locked.reply,/已锁定/);
+});
+
+test('门洞尺寸与通行宽度分别说明，小卧室的床无合法空位时只解释原因',()=>{
+ const {house,door,context}=bedroomWithBlockedDoor();
+ door.width=.72;
+ const widthQuestion='推婴儿车从卧室门洞到床边，能不能全程保证 90 厘米净宽？';
+ assert.match(doorOpeningAdvice(context(),widthQuestion)?.reply??'',/72 厘米.*小于 90 厘米/);
+ door.width=.95;
+ assert.match(doorOpeningAdvice(context(),widthQuestion)?.reply??'',/连续通行宽度仍需测量/);
+
+ const room=house.rooms.find(item=>item.id==='bedroom')!;
+ const bed=house.items.find(item=>item.id==='bed')!;
+ house.items=house.items.filter(item=>item.roomId!==room.id||item===bed);
+ Object.assign(room,{w:2.05,d:2.45});
+ Object.assign(bed,{x:room.x,z:room.z});
+ door.offset=0;
+ assert.match(warnings(house)[door.id][0],/双人床/);
+ const noPlace=doorOpeningAdvice(context(),'床挡住了卧室门，帮我挪开。');
+ assert.equal(noPlace?.kind,'text');
+ assert.match(noPlace.reply,/没有找到.*合法空位/);
+ assert.match(doorOpeningAdvice({...context(),doors:[]},'床挡住卧室门了吗？')?.reply??'',/没有已标注的房门/);
+ assert.equal(doorOpeningAdvice(context(),'把床往北挪30厘米，别挡门。'),undefined);
+});
+
+test('布局上下文仅包含当前房间，能区分同名家具并使用已选对象',()=>{
+ const house=initialHouse();
+ const chair=house.items.find(item=>item.id==='chair')!;
+ house.items.push({...chair,id:'second-chair',x:0,z:-1.5});
+ const context=makeLayoutContext(house,'living',[],'balanced','');
+ assert.ok(readLayoutContext(context));
+ assert.equal(context.items.some(item=>item.id==='bed'),false);
+ assert.equal(context.doors.length,1);
+ assert.deepEqual(explicitTargets(context,'把椅子挪到沙发旁边').map(item=>item.id),['chair','second-chair']);
+ assert.notEqual(itemLabel(context.items,'chair'),itemLabel(context.items,'second-chair'));
+ assert.deepEqual(explicitTargets({...context,selectedIds:['second-chair']},'把这把椅子挪开').map(item=>item.id),['second-chair']);
+ assert.deepEqual(explicitTargets(context,'把它往南挪一点'),[]);
+ assert.deepEqual(explicitTargets({...context,confirmedId:'chair'},'把椅子挪开').map(item=>item.id),['chair']);
+ assert.equal(readLayoutContext({...context,selectedIds:['bed']}),undefined);
+ assert.equal(readLayoutContext({...context,items:[null]}),undefined);
+});
+
+test('建议优先从可用家具中选，规则拦截锁定、跨房、越界、重叠和挡门',()=>{
+ const house=initialHouse(),chair=house.items.find(item=>item.id==='chair')!,table=house.items.find(item=>item.id==='table')!;
+ house.items.find(item=>item.id==='sofa')!.locked=true;
+ const context=makeLayoutContext(house,'living',[],'balanced','茶几保持原位');
+ assert.deepEqual([...protectedIds(context,'让中央更宽敞')].sort(),['sofa','table']);
+ assert.deepEqual([...protectedIds({...context,custom:''},'移动椅子但保留沙发')],['sofa']);
+ assert.match(assertError({itemId:'sofa',x:0,z:0}),/锁定/);
+ assert.match(assertError({itemId:'bed',x:0,z:0}),/没有/);
+ assert.match(assertError({itemId:chair.id,x:-10,z:0}),/边界/);
+ assert.match(assertError({itemId:chair.id,x:table.x,z:table.z}),/重叠/);
+ assert.match(assertError({itemId:chair.id,x:-3.9,z:-1.52}),/房门开启/);
+
+ function assertError(move:{itemId:string;x:number;z:number}){
+  const outcome=applyLayoutMove(house,'living',move);
+  assert.ok('error' in outcome);
+  return outcome.error;
+ }
+});
+
+test('按不同房间的目标生成可验证方案，保留其他家具并报告无解',()=>{
+ const original=initialHouse();
+ for(const [roomId,itemId,goal] of [['living','chair','center'],['bedroom','bed-cabinet','door']] as const){
+  const result=findLayoutMoves(makeLayoutContext(original,roomId,[],'balanced',''),{itemId,goal});
+  assert.ok(result.moves.length);
+  for(const move of result.moves){
+   const update=applyLayoutMove(original,roomId,move);
+   assert.ok('house' in update);
+   assert.deepEqual(warnings(update.house),{});
+   assert.deepEqual(update.house.items.filter(item=>item.id!==itemId),original.items.filter(item=>item.id!==itemId));
+  }
+ }
+ const context=makeLayoutContext(original,'living',[],'balanced','');
+ const item=context.items[0];
+ const atTarget=findLayoutMoves(context,{itemId:item.id,goal:'position',target:{x:item.x,z:item.z}});
+ assert.equal(atTarget.moves.length,0);
+ assert.match(atTarget.reply,/没有找到/);
+});
+
+test('对话上下文传达实际材质和仍有效的未提交预览',()=>{
+ const house=initialHouse();
+ Object.assign(house.rooms[0],{wallMaterial:'ivory',floorMaterial:'oak'});
+ const preview={move:{itemId:'chair',x:-1.65,z:0},state:'previewing'} as const;
+ const context=makeLayoutContext(house,'living',['chair'],'hosting','',undefined,preview);
+ const received=readLayoutContext(JSON.parse(JSON.stringify(context)));
+ assert.deepEqual(received?.previousSuggestion,preview);
+ assert.equal(received?.room.wallMaterial,'ivory');
+ assert.equal(received?.room.floorMaterial,'oak');
+ assert.equal(received?.items.find(item=>item.id==='chair')?.z,.3);
+ const measurements=measurePreviousSuggestion(context);
+ assert.deepEqual([measurements?.eastCm,measurements?.southCm],[0,-30]);
+ const tableGap=measurements?.nearbyGaps.find(value=>value.itemId==='table');
+ assert.ok(tableGap && tableGap.beforeCm===tableGap.afterCm);
+ assert.equal(readLayoutContext({...context,previousSuggestion:{...preview,move:{...preview.move,itemId:'bed'}}}),undefined);
+ assert.equal(readLayoutContext({...context,previousSuggestion:{...preview,move:{...preview.move,x:99}}}),undefined);
+});
+
+test('明确的单方向距离用原文计算，精确落点冲突时不换到附近',()=>{
+ const context=makeLayoutContext(initialHouse(),'living',[],'balanced','');
+ const exact=exactRelativeMove(context,'chair','把单椅往北平移30厘米，东西位置不变。');
+ assert.ok(exact?.kind==='proposal');
+ assert.deepEqual(exact.moves,[{itemId:'chair',x:-1.65,z:0}]);
+ assert.match(exact.explanations[0].movement,/向北 30 厘米/);
+ assert.match(exact.explanations[0].impact,/与椭圆茶几最近间距仍约 22 厘米/);
+ const collision=exactRelativeMove(context,'chair','把单椅向西挪1.1米。');
+ assert.equal(collision?.kind,'text');
+ assert.match(collision.reply,/椭圆茶几重叠/);
+});
+
+test('备选落点分别计算与参照家具的影响',()=>{
+ const house=initialHouse();
+ const context=makeLayoutContext(house,'living',[],'balanced','');
+ const choices=[{itemId:'chair',x:-1.65,z:0},{itemId:'chair',x:-1.2,z:0}];
+ assert.ok(choices.every(move=>'house' in applyLayoutMove(house,'living',move)));
+ const proposal=makeLayoutProposal(context,{goal:'conversation',anchorId:'table'},choices,'调整会客间距。');
+ assert.ok(proposal.kind==='proposal');
+ assert.match(proposal.explanations[0].impact,/椭圆茶几.*仍约 22 厘米/);
+ assert.match(proposal.explanations[1].impact,/椭圆茶几.*约 22 厘米 变为 67 厘米/);
+});
+
+test('书桌靠西窗时沿窗墙避开单椅，就近无空间时说明冲突',()=>{
+ const house=initialHouse();
+ const context=()=>makeLayoutContext(house,'study',[],'balanced','');
+ const reference=wallReference(context(),'把书桌移到西窗旁边');
+ assert.deepEqual(reference,{wall:'west',windowId:'window-study'});
+ const request={goal:'wall',itemId:'desk',...reference} as const;
+ const advice=wallPlacementAdvice(context(),request);
+ assert.ok(advice.kind==='proposal');
+ const move=advice.moves[0];
+ assert.ok(Math.abs(move.x-(-.839))<1e-7);
+ assert.ok(move.z<=2.42&&move.z+.325>2.65);
+ assert.match(advice.explanations[0].reason,/西墙窗口一侧/);
+ const applied=applyLayoutMove(house,'study',move);
+ assert.ok('house' in applied);
+ assert.deepEqual(warnings(applied.house),{});
+ assert.deepEqual(applied.house.items.filter(item=>item.id!=='desk'),house.items.filter(item=>item.id!=='desk'));
+
+ const plant=house.items.find(item=>item.id==='study-plant')!;
+ house.items=house.items.filter(item=>item!==plant);
+ house.items.unshift({...plant,id:'fixed-cabinet',kind:'cabinet',name:'固定柜',x:-1.28,z:3.2,w:.4,d:2.2,rotation:0,locked:true});
+ const failure=wallPlacementAdvice(context(),request);
+ assert.ok(failure.kind==='text');
+ assert.match(failure.reply,/西墙窗口一侧.*固定柜重叠/);
+});
+
+test('会客微调保留沙发与茶几原有相对位置，不能改善时保留原位',()=>{
+ const current=makeLayoutContext(initialHouse(),'living',[],'balanced','');
+ const noMove=findLayoutMoves(current,{itemId:'sofa',goal:'conversation'});
+ assert.deepEqual(noMove.moves,[]);
+ assert.match(noMove.reply,/没有找到.*小幅移动/);
+ const other=alternateHouse();
+ const context=makeLayoutContext(other,'sky-living',[],'hosting','');
+ const sofa=context.items.find(item=>item.id==='sky-sofa')!,table=context.items.find(item=>item.id==='sky-table')!;
+ const result=findLayoutMoves(context,{itemId:sofa.id,goal:'conversation'});
+ assert.ok(result.moves.length);
+ for(const move of result.moves){
+  assert.ok(move.z<table.z && move.z>sofa.z);
+  assert.ok(Math.abs(move.x-sofa.x)<=.25);
+  assert.ok(Math.hypot(move.x-sofa.x,move.z-sofa.z)<=.85);
+  const update=applyLayoutMove(other,'sky-living',move);
+  assert.ok('house' in update);
+  assert.deepEqual(warnings(update.house),{});
+ }
+});
+
+test('对齐只平移请求中的对象，并且可以使用锁定家具当参照',()=>{
+ const house=initialHouse();
+ house.items=house.items.filter(item=>item.id==='sofa'||item.id==='table');
+ const sofa=house.items[0],table=house.items[1];
+ sofa.locked=true;
+ const request={itemId:table.id,anchorId:sofa.id,goal:'align'} as const;
+ const context=()=>makeLayoutContext(house,'living',[],'balanced','');
+ assert.match(findLayoutMoves(context(),request).reply,/已经基本对齐/);
+ table.x+=.5;
+ const proposal=findLayoutMoves(context(),request);
+ const best=proposal.moves[0];
+ assert.deepEqual(best,{itemId:table.id,x:sofa.x,z:table.z});
+ const update=applyLayoutMove(house,'living',best);
+ assert.ok('house' in update);
+ assert.deepEqual(update.house.items[0],sofa);
+ assert.match(findLayoutMoves(context(),{...request,anchorId:'bed'}).reply,/与哪件家具对齐/);
+});
+
 test('示例户型无家具重叠、越界或挡门',()=>{assert.deepEqual(warnings(initialHouse()),{});});
 test('新增两居房型格式有效且无重叠、穿墙或挡门',()=>{const w=defaultWorkspace();assert.ok(validHouse(w.projects.sky));assert.deepEqual(warnings(w.projects.sky),{});assert.notDeepEqual(w.projects.forest.rooms,w.projects.sky.rooms);});
 test('两个房型编辑和存档独立，保存后恢复当前房型',()=>{const w=defaultWorkspace(),original=copy(w.projects.sky);w.projects.forest=moveItems(w.projects.forest,['sofa'],.2,.2,true);assert.deepEqual(w.projects.sky,original);w.activePlanId='sky';const restored=restoreWorkspace(JSON.parse(JSON.stringify(w)),null);assert.equal(restored.recovered,true);assert.equal(restored.workspace.activePlanId,'sky');assert.deepEqual(restored.workspace.projects,w.projects);});

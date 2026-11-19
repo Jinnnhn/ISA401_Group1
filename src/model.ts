@@ -83,10 +83,13 @@ export function doorPoint(h:House,d:Door,angle:number,radius=d.width):[number,nu
  return [f.hx+radius*(f.ux*f.side*Math.cos(a)+f.vx*dir*Math.sin(a)),f.hz+radius*(f.uz*f.side*Math.cos(a)+f.vz*dir*Math.sin(a))];
 }
 export function doorSweep(h:House,d:Door):[number,number][]{const f=doorFrame(h,d);return [[f.hx,f.hz],...Array.from({length:25},(_,i)=>doorPoint(h,d,i*90/24))];}
+export function itemBlocksDoor(h:House,item:Item,door:Door){
+ return item.roomId===door.roomId&&polygonOverlap(corners(item),doorSweep(h,door));
+}
 export function warnings(h:House):Record<string,string[]> {
  const out:Record<string,string[]>={};const add=(id:string,text:string)=>{(out[id]??=[]).push(text);};
  for(const f of h.items){const r=roomOf(h,f.roomId);if(!itemInsideRoom(f,r))add(f.id,'超出房间边界');
- for(const d of h.doors.filter(d=>d.roomId===f.roomId))if(polygonOverlap(corners(f),doorSweep(h,d))){add(f.id,'占用房门开启区域');add(d.id,`${f.name}挡住开门范围`);}}
+ for(const d of h.doors)if(itemBlocksDoor(h,f,d)){add(f.id,'占用房门开启区域');add(d.id,`${f.name}挡住开门范围`);}}
  for(let i=0;i<h.items.length;i++)for(let j=i+1;j<h.items.length;j++){const a=h.items[i],b=h.items[j];if(a.roomId===b.roomId&&polygonOverlap(corners(a),corners(b))){add(a.id,`与${b.name}重叠`);add(b.id,`与${a.name}重叠`);}}
  return out;
 }
@@ -94,7 +97,7 @@ export const snap=(n:number,enabled:boolean)=>enabled?Math.round(n*10)/10:n;
 // Walls are centred on the room boundary and are 12 cm thick. Keep the complete
 // rotated footprint inside their inner faces, with a small numerical clearance.
 export const WALL_INSET=.061;
-export function itemInsideRoom(f:Item,r:Room){return corners(f).every(([x,z])=>x>=r.x-r.w/2+WALL_INSET-1e-7&&x<=r.x+r.w/2-WALL_INSET+1e-7&&z>=r.z-r.d/2+WALL_INSET-1e-7&&z<=r.z+r.d/2-WALL_INSET+1e-7);}
+export function itemInsideRoom(f:Parameters<typeof corners>[0],r:Room){return corners(f).every(([x,z])=>x>=r.x-r.w/2+WALL_INSET-1e-7&&x<=r.x+r.w/2-WALL_INSET+1e-7&&z>=r.z-r.d/2+WALL_INSET-1e-7&&z<=r.z+r.d/2-WALL_INSET+1e-7);}
 export function constrainHouse(h:House):{house:House;adjusted:boolean;error?:string}{
  const next=copy(h);let adjusted=false;
  for(const r of next.rooms){
