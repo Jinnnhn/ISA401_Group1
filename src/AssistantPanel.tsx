@@ -1,6 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {ChevronDown,ChevronUp,Send,Sparkles} from 'lucide-react';
 import {isMove,isRecord,itemLabel,layoutPreferences,makeLayoutContext,roomObjectives,type Advice,type AdviceDraft,type LayoutPreference,type MoveExplanation,type RoomObjective} from './layoutAdvice';
+import {readRoomEdit,roomEditTitle} from './roomEdits';
 import type {House} from './model';
 
 type ChatMessage={role:'user'|'assistant';content:string};
@@ -40,6 +41,11 @@ function readAdvice(value:unknown,house:House,roomId:string):Advice | undefined 
   if(value.kind==='clarify') {
     if(!Array.isArray(value.candidateIds) || value.candidateIds.length<2 || !value.candidateIds.every(isItem)) return;
     return {kind:'clarify',reply:value.reply,candidateIds:value.candidateIds as string[]};
+  }
+  if(value.kind==='roomEdit'){
+    const edit=readRoomEdit(value.edit,roomId);
+    if(edit)return {kind:'roomEdit',reply:value.reply,edit};
+    return;
   }
   if(value.kind===undefined || value.kind==='text') return {kind:'text',reply:value.reply,keepSuggestion:value.keepSuggestion===true};
 }
@@ -121,7 +127,8 @@ export default function AssistantPanel({house,roomId,selected,collapsed,unavaila
   const move=active?.advice.kind==='proposal'?active.advice.moves[active.index]:null;
   const explanation=active?.advice.kind==='proposal'?active.advice.explanations[active.index]:null;
   const roomPlan=active?.advice.kind==='roomProposal'?active.advice:null;
-  const previewing=previewDraft!==null&&(previewDraft===move||previewDraft===roomPlan);
+  const roomEdit=active?.advice.kind==='roomEdit'?active.advice:null;
+  const previewing=previewDraft!==null&&(previewDraft===move||previewDraft===roomPlan||previewDraft===roomEdit);
   const clarifyIds=active?.advice.kind==='clarify'?active.advice.candidateIds:[];
   const confirmed=selected.length===1 && clarifyIds.includes(selected[0])?selected[0]:undefined;
 
@@ -149,16 +156,26 @@ export default function AssistantPanel({house,roomId,selected,collapsed,unavaila
         }}/>
       </div>
       <div className="assistant-chat-log" role="log" aria-label="聊天记录" ref={logRef} tabIndex={0}>
-        {!messages.length&&!pending&&<p className="assistant-note">可以问我怎么布置{room.name}，也可以先选中家具再提问。</p>}
+        {!messages.length&&!pending&&<p className="assistant-note">可以请我布置{room.name}、添加家具或换墙面。</p>}
         {(pending?[...messages,{role:'user' as const,content:pending}]:messages).map((message,index)=><div className={'assistant-chat-message '+message.role} key={index}>
           <strong>{message.role==='user'?'你':'空间助手'}</strong><div>{messageText(message.content)}</div>
         </div>)}
         {pending&&<p className="assistant-note" role="status">正在分析当前房间…</p>}
       </div>
-      {active&&<div className={`assistant-result${!stale&&(move||roomPlan)?' assistant-result--proposal':''}`} role="region" aria-label="布局建议">
+      {active&&<div className={`assistant-result${!stale&&(move||roomPlan||roomEdit)?' assistant-result--proposal':''}`} role="region" aria-label="布局建议">
         {stale?<>
           <p>布局已变化，请按当前房间重新生成建议。</p>
           <div className="assistant-actions"><button type="button" onClick={()=>void send(active.question)}>重新生成</button><button type="button" onClick={ignore}>关闭</button></div>
+        </>:roomEdit?<>
+          <div className="assistant-result-title"><strong>{room.name} · {roomEditTitle(roomEdit.edit)}</strong></div>
+          <div className="assistant-actions">
+            <button type="button" className="assistant-primary" disabled={unavailable} onClick={()=>{
+              if(!previewing){onPreview(roomEdit,active.base);return;}
+              if(onApply(roomEdit,active.base))setActive(null);
+            }}>{previewing?'应用建议':'预览建议'}</button>
+            {previewing&&<button type="button" onClick={()=>onPreview(null,house)}>取消预览</button>}
+            <button type="button" onClick={ignore}>忽略建议</button>
+          </div>
         </>:roomPlan?<>
           <div className="assistant-result-title"><strong>{room.name} · 建议调整 {roomPlan.changes.length} 件家具</strong></div>
           <dl className="assistant-explanation"><dt>目标</dt><dd>{roomPlan.objectiveLabel}</dd></dl>

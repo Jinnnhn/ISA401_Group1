@@ -2,7 +2,7 @@ import {useEffect,useRef,useState} from 'react';
 import * as T from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js';
-import {copy,corners,doorFrame,doorPoint,doorSweep,moveItems,roomOf,snap,warnings,type House,type Item,type Room,type Tool} from './model';
+import {corners,doorFrame,doorPoint,doorSweep,roomOf,snap,warnings,type House,type Item,type Room,type Tool} from './model';
 import {bindRightOrbit} from './rightOrbit';
 import {furnitureDragAction} from './selection';
 import {roomTexture} from './materials';
@@ -24,6 +24,7 @@ function label(parent:T.Object3D,text:string,x:number,y:number,z:number,color='#
 }
 export default function Scene(props:Props){
  const host=useRef<HTMLDivElement>(null),latest=useRef(props),engine=useRef<Engine|null>(null);latest.current=props;
+ const clickedItemId=useRef<string|undefined>(undefined);
  const [error,setError]=useState(''),[modelStatus,setModelStatus]=useState('loading');
  useEffect(()=>{
   const el=host.current!;let renderer:T.WebGLRenderer;
@@ -38,7 +39,7 @@ export default function Scene(props:Props){
   const ray=new T.Raycaster(),pointer=new T.Vector2(),plane=new T.Plane(new T.Vector3(0,1,0),0),objects=new Map<string,T.Group>(),outlines=new Map<string,T.Line>();
   const poses=new Map<string,{position:T.Vector3;target:T.Vector3;zoom:number}>();const targets=new Map<string,T.Vector3>();const clock=new T.Clock();
   let activeRealistic=false;let width=Math.max(1,el.clientWidth),height=Math.max(1,el.clientHeight),activeRoom='',activeMode='',frame=0,hover='',lastView=0,measureStart:T.Vector3|null=null;
-  type Drag={startX:number;startY:number;point:T.Vector3;id:string;hitId:string;ids:string[];base:House;preview:House|null;moved:boolean;blocked:boolean;valid:boolean;yieldId?:string;reason:string;add:boolean;pointerId:number};let drag:Drag|null=null;
+  type Drag={startX:number;startY:number;point:T.Vector3|null;hitId:string;ids:string[];base:House;preview:House|null;moved:boolean;blocked:boolean;valid:boolean;yieldId?:string;reason:string;add:boolean;pointerId:number};let drag:Drag|null=null;
   const rect=document.createElement('div');rect.className='selection-marquee';rect.hidden=true;el.appendChild(rect);
   function clear(g:T.Group){dispose(g);g.clear();}
   function project(x:number,y:number,z:number){const v=new T.Vector3(x,y,z).project(camera);return {x:(v.x+1)/2*width,y:(1-v.y)/2*height};}
@@ -85,7 +86,8 @@ export default function Scene(props:Props){
   function outlineView(){clear(viewRoot);const p=latest.current;if(!p.mini||!p.view?.length)return;const outline=line(viewRoot,[...p.view,p.view[0]].map(([x,z])=>new T.Vector3(x,.12,z)),'#557d5f',true);(outline.material as T.LineDashedMaterial).depthTest=false;outline.renderOrder=50;}
   function rebuild(){
    targets.clear();const p=latest.current;if(drag)return;clear(root);clear(annotation);objects.clear();outlines.clear();facades.length=0;
-   const rooms=p.mini?p.house.rooms:p.house.rooms.filter(r=>r.id===p.roomId);const warn=warnings(!p.mini&&p.advicePreview&&p.draft?p.draft:p.house);
+   const renderHouse=!p.mini&&!p.realistic&&p.advicePreview&&p.draft?p.draft:p.house;
+   const rooms=p.mini?renderHouse.rooms:renderHouse.rooms.filter(r=>r.id===p.roomId);const warn=warnings(renderHouse);
    const previewIds=new Set(p.advicePreview?.map(move=>move.itemId));
    for(const r of rooms){
     const floor=box(root,r.w,.15,r.d,'#ffffff',r.x,-.095,r.z,.01);floor.userData.id=r.id;const floorMat=floor.material as T.MeshStandardMaterial;const woodFloor=(r.floorMaterial??'parquet')==='parquet';floorMat.map=roomTexture(r,'floor');floorMat.roughness=woodFloor?.72:.58;floorMat.bumpMap=floorMat.map;floorMat.bumpScale=woodFloor?.014:.009;
@@ -95,30 +97,31 @@ export default function Scene(props:Props){
      const fixed=wall==='north'?r.z-r.d/2:wall==='south'?r.z+r.d/2:wall==='west'?r.x-r.w/2:r.x+r.w/2;
      const shell=new T.Group();root.add(shell);facades.push({group:shell,r,wall});
      const full=!p.mini&&p.mode==='3d';
-     const sections=full?wallSections(p.house,r,wall):[{a:-len/2,b:len/2,low:0,high:.12}];
+     const sections=full?wallSections(renderHouse,r,wall):[{a:-len/2,b:len/2,low:0,high:.12}];
      for(const section of sections){const middle=(section.a+section.b)/2,height=section.high-section.low;
       const panel=box(shell,alongX?section.b-section.a:.12,height,alongX?.12:section.b-section.a,'#ffffff',alongX?r.x+middle:fixed,section.low+height/2,alongX?fixed:r.z+middle,.003);
       const mat=panel.material as T.MeshStandardMaterial;const wallMap=roomTexture(r,'wall');mat.map=wallMap;if((r.wallMaterial??'damask')==='damask'){wallMap.repeat.set(Math.max(.01,(section.b-section.a)/2.4),-Math.max(.01,height/2.4));wallMap.offset.set(section.a/2.4,(section.low+height)/2.4);mat.bumpMap=wallMap;mat.bumpScale=.0024;mat.metalness=.05;}mat.roughness=.9;
      }
      // Skirting remains at floor level even when the near wall is cut away.
-     const doorHoles=p.house.doors.filter(d=>d.roomId===r.id&&d.wall===wall).map(d=>({a:d.offset-d.width/2,b:d.offset+d.width/2})).sort((a,b)=>a.a-b.a);
+     const doorHoles=renderHouse.doors.filter(d=>d.roomId===r.id&&d.wall===wall).map(d=>({a:d.offset-d.width/2,b:d.offset+d.width/2})).sort((a,b)=>a.a-b.a);
      let start=-len/2;const edges:{a:number;b:number}[]=[];for(const hole of doorHoles){edges.push({a:start,b:hole.a});start=hole.b;}edges.push({a:start,b:len/2});
      for(const edge of edges)if(edge.b>edge.a){const middle=(edge.a+edge.b)/2;box(root,alongX?edge.b-edge.a:.025,.085,alongX?.025:edge.b-edge.a,'#d2cdc2',alongX?r.x+middle:fixed,.043,alongX?fixed:r.z+middle,.002);}
     }
     if(!p.mini){if(p.grid&&!p.realistic&&(p.selected.length||p.tool!=='select')){const grid=new T.GridHelper(1,10,'#a6aaa1','#c0c2ba');grid.scale.set(r.w,1,r.d);grid.position.set(r.x,.014,r.z);root.add(grid);}if(p.measure&&!p.realistic)dimensions(r);}
     else label(annotation,r.name,r.x,.2,r.z,'#57674f',.95);
    }
-   for(const f of p.house.items.filter(f=>rooms.some(r=>r.id===f.roomId))){
+   for(const f of renderHouse.items.filter(f=>rooms.some(r=>r.id===f.roomId))){
+    const previewAddition=renderHouse!==p.house&&!p.house.items.some(item=>item.id===f.id);
     const g=realFurniture(f,!!p.mini);root.add(g);objects.set(f.id,g);
-    const color=warn[f.id]?'#cc7457':p.selected.includes(f.id)?'#376653':f.locked?'#ab9371':'#a0b296';
+    const color=warn[f.id]?'#cc7457':previewAddition?'#167755':p.selected.includes(f.id)?'#376653':f.locked?'#ab9371':'#a0b296';
     const height=f.kind==='desk'?f.h+.45:f.kind==='bed'?1:f.h+.16;
-    const edge=new T.LineSegments(new T.EdgesGeometry(new T.BoxGeometry(f.w+.09,height,f.d+.09)),new T.LineDashedMaterial({color,dashSize:.11,gapSize:.065,depthTest:false,transparent:true,opacity:.9}));edge.computeLineDistances();edge.position.y=height/2;edge.renderOrder=20;g.add(edge);edge.visible=!p.mini&&!p.realistic&&(p.selected.includes(f.id)||!!warn[f.id]||f.locked);outlines.set(f.id,edge);
-    if(!p.mini&&!p.realistic&&p.selected.includes(f.id)&&!previewIds.has(f.id)){label(annotation,`${itemLabel(p.house.items.filter(item=>item.roomId===p.roomId),f.id)}${f.locked?' · 已锁定':''}  ${f.w} × ${f.d} m`,f.x,f.h+.4,f.z,'#376653');}
+    const edge=new T.LineSegments(new T.EdgesGeometry(new T.BoxGeometry(f.w+.09,height,f.d+.09)),new T.LineDashedMaterial({color,dashSize:.11,gapSize:.065,depthTest:false,transparent:true,opacity:.9}));edge.computeLineDistances();edge.position.y=height/2;edge.renderOrder=20;g.add(edge);edge.visible=!p.mini&&!p.realistic&&(previewAddition||p.selected.includes(f.id)||!!warn[f.id]||f.locked);outlines.set(f.id,edge);
+    if(!p.mini&&!p.realistic&&p.selected.includes(f.id)&&!previewIds.has(f.id)){label(annotation,`${itemLabel(renderHouse.items.filter(item=>item.roomId===p.roomId),f.id)}${f.locked?' · 已锁定':''}  ${f.w} × ${f.d} m`,f.x,f.h+.4,f.z,'#376653');}
    }
-   for(const d of p.house.doors.filter(d=>rooms.some(r=>r.id===d.roomId))){
-    const r=roomOf(p.house,d.roomId),f=doorFrame(p.house,d),g=new T.Group();g.userData.id=d.id;root.add(g);
+   for(const d of renderHouse.doors.filter(d=>rooms.some(r=>r.id===d.roomId))){
+    const r=roomOf(renderHouse,d.roomId),f=doorFrame(renderHouse,d),g=new T.Group();g.userData.id=d.id;root.add(g);
     facades.push({group:g,r,wall:d.wall});
-    const end=doorPoint(p.house,d,d.open?90:0),h=p.mode==='2d'||p.mini?.08:doorHeight(d);
+    const end=doorPoint(renderHouse,d,d.open?90:0),h=p.mode==='2d'||p.mini?.08:doorHeight(d);
     const leaf=new T.Group();leaf.position.set(f.hx,0,f.hz);leaf.rotation.y=-Math.atan2(end[1]-f.hz,end[0]-f.hx);g.add(leaf);
     box(leaf,d.width-.015,h,.04,p.selected.includes(d.id)?'#8d9b91':'#b7a086',d.width/2,h/2,0,.004);
     if(h>.2){
@@ -128,11 +131,11 @@ export default function Scene(props:Props){
      for(const sign of [-1,1])box(g,alongX?.055:.16,h+.05,alongX?.16:.055,'#ded9cf',f.x+f.ux*sign*(d.width/2+.018),(h+.05)/2,f.z+f.uz*sign*(d.width/2+.018),.003);
      box(g,alongX?d.width+.09:.16,.065,alongX?.16:d.width+.09,'#ded9cf',f.x,h+.03,f.z,.003);
     }
-    if(!p.realistic){const arc=doorSweep(p.house,d).slice(1).map(([x,z])=>new T.Vector3(x,.035,z));line(g,arc,warn[d.id]?'#ad6754':'#a3947e',true);}
+    if(!p.realistic){const arc=doorSweep(renderHouse,d).slice(1).map(([x,z])=>new T.Vector3(x,.035,z));line(g,arc,warn[d.id]?'#ad6754':'#a3947e',true);}
     if(p.selected.includes(d.id)&&!p.mini&&!p.realistic)label(annotation,`房门 · ${d.width} × ${doorHeight(d)} m`,f.x,h+.25,f.z);
    }
-   for(const w of p.house.windows.filter(w=>rooms.some(r=>r.id===w.roomId))){
-    const r=roomOf(p.house,w.roomId),alongX=w.wall==='north'||w.wall==='south',x=alongX?r.x+w.offset:r.x+(w.wall==='west'?-r.w/2:r.w/2),z=alongX?r.z+(w.wall==='north'?-r.d/2:r.d/2):r.z+w.offset;
+   for(const w of renderHouse.windows.filter(w=>rooms.some(r=>r.id===w.roomId))){
+    const r=roomOf(renderHouse,w.roomId),alongX=w.wall==='north'||w.wall==='south',x=alongX?r.x+w.offset:r.x+(w.wall==='west'?-r.w/2:r.w/2),z=alongX?r.z+(w.wall==='north'?-r.d/2:r.d/2):r.z+w.offset;
     const g=new T.Group();g.userData.id=w.id;root.add(g);facades.push({group:g,r,wall:w.wall});
     const flat=p.mode==='2d'||p.mini,h=flat?.05:windowHeight(w),y=flat?.04:windowSill(w)+h/2;
     const glass=box(g,alongX?w.width:.02,h,alongX?.02:w.width,'#b7c6c7',x,y,z,.001);const mat=glass.material as T.MeshStandardMaterial;
@@ -177,30 +180,28 @@ export default function Scene(props:Props){
   controls.addEventListener('change',()=>emitView());
   function drawPreview(h:House,yieldId?:string){targets.clear();const warn=warnings(h);for(const f of h.items){const g=objects.get(f.id);if(!g)continue;if(f.id===yieldId)targets.set(f.id,new T.Vector3(f.x,0,f.z));else g.position.set(f.x,0,f.z);g.rotation.y=f.rotation*Math.PI/180;const edge=outlines.get(f.id);if(edge){edge.visible=!latest.current.mini&&!latest.current.realistic&&(latest.current.selected.includes(f.id)||!!warn[f.id]||!!drag?.ids.includes(f.id)||f.locked);(edge.material as T.LineBasicMaterial).color.set(warn[f.id]?'#cc7457':'#376653');}}}
   function down(e:PointerEvent){
-   if(e.button!==0||drag||latest.current.blocked||latest.current.realistic&&!latest.current.mini||latest.current.advicePreview)return;const p=latest.current,result=hit(e);if(!result.point)return;
-   if(p.tool==='measure'&&!p.mini){clear(measureRoot);if(!measureStart){measureStart=result.point.clone();p.onMessage('测量：再点击一个位置，查看两点间距离。');}else{const end=result.point.clone();line(measureRoot,[measureStart.clone().setY(.12),end.clone().setY(.12)],'#b88045');label(measureRoot,`${measureStart.distanceTo(end).toFixed(2)} m`,(measureStart.x+end.x)/2,.35,(measureStart.z+end.z)/2,'#9e6a35');measureStart=null;p.onMessage('测量完成；继续点击可开始下一次测量。');}return;}
-   const item=p.house.items.find(f=>f.id===result.id),moving=!p.mini&&furnitureDragAction(item,p.selected,p.tool,e.shiftKey)==='move';
-   if(!p.mini&&p.tool==='select'&&item?.locked&&!e.shiftKey){if(!p.selected.includes(item.id))p.onSelect([item.id]);p.onMessage('家具已锁定，请先解锁；拖动不会启动框选。');return;}
-   const id=p.mini?result.id:moving?result.id:'',ids=moving?(p.selected.includes(result.id)?[...p.selected]:[result.id]):[];
-   if(moving&&!p.selected.includes(result.id))p.onSelect(ids);
-   drag={startX:e.clientX,startY:e.clientY,point:result.point.clone(),id,hitId:result.id,ids,base:copy(p.house),preview:null,moved:false,blocked:false,valid:true,reason:'',add:e.shiftKey,pointerId:e.pointerId};
+   if(e.button!==0||drag||rightOrbit?.isActive()||latest.current.blocked||latest.current.realistic&&!latest.current.mini||latest.current.advicePreview)return;
+   const p=latest.current,result=hit(e);
+   if(p.tool==='measure'&&!p.mini){if(!result.point)return;clear(measureRoot);if(!measureStart){measureStart=result.point.clone();p.onMessage('测量：再点击一个位置，查看两点间距离。');}else{const end=result.point.clone();line(measureRoot,[measureStart.clone().setY(.12),end.clone().setY(.12)],'#b88045');label(measureRoot,`${measureStart.distanceTo(end).toFixed(2)} m`,(measureStart.x+end.x)/2,.35,(measureStart.z+end.z)/2,'#9e6a35');measureStart=null;p.onMessage('测量完成；继续点击可开始下一次测量。');}return;}
+   const item=p.house.items.find(f=>f.id===result.id);
+   const ids=!p.mini&&result.point&&furnitureDragAction(item,p.selected,p.tool,e.shiftKey,clickedItemId.current)==='move'?[result.id]:[];
+   drag={startX:e.clientX,startY:e.clientY,point:result.point,hitId:result.id,ids,base:p.house,preview:null,moved:false,blocked:false,valid:true,reason:'',add:e.shiftKey,pointerId:e.pointerId};
    if(!p.mini){p.onBusy?.(true);controls.enabled=false;renderer.domElement.setPointerCapture(e.pointerId);}
   }
   function move(e:PointerEvent){
    if(rightOrbit?.isActive())return;
    const p=latest.current;
-   if(!drag){if(p.mini||p.realistic||p.advicePreview)return;const {id}=hit(e);if(hover!==id){const prev=outlines.get(hover);if(prev&&!p.selected.includes(hover)&&!p.house.items.find(f=>f.id===hover)?.locked&&!warnings(p.house)[hover])prev.visible=false;hover=id;const next=outlines.get(id);if(next)next.visible=true;}const f=p.house.items.find(f=>f.id===id);renderer.domElement.style.cursor=p.tool==='measure'||p.tool==='box'?'crosshair':furnitureDragAction(f,p.selected,p.tool)==='move'?'grab':id?'pointer':'default';return;}
+   if(!drag){if(p.mini||p.realistic||p.advicePreview)return;const {id}=hit(e);if(hover!==id){const prev=outlines.get(hover);if(prev&&!p.selected.includes(hover)&&!p.house.items.find(f=>f.id===hover)?.locked&&!warnings(p.house)[hover])prev.visible=false;hover=id;const next=outlines.get(id);if(next)next.visible=true;}const f=p.house.items.find(f=>f.id===id);renderer.domElement.style.cursor=p.tool==='measure'||p.tool==='box'?'crosshair':furnitureDragAction(f,p.selected,p.tool,e.shiftKey,clickedItemId.current)==='move'?'grab':id?'pointer':'default';return;}
    if(e.pointerId!==drag.pointerId)return;
    const dx=e.clientX-drag.startX,dy=e.clientY-drag.startY;if(Math.hypot(dx,dy)>5)drag.moved=true;if(!drag.moved||p.mini)return;
-   const item=drag.base.items.find(f=>f.id===drag!.id);
-   if(item){
+   if(drag.ids.length&&drag.point){
     const v=point(e);if(!v)return;const result=previewMove(drag.base,drag.ids,v.x-drag.point.x,v.z-drag.point.z,p.grid);
     drag.preview=result.house;drag.valid=result.valid;drag.yieldId=result.yieldId;drag.reason=result.message;
     const anchor=drag.base.items.find(f=>drag!.ids.includes(f.id))!,moved=drag.preview.items.find(f=>f.id===anchor.id)!;
     drag.blocked=Math.abs(moved.x-snap(anchor.x+v.x-drag.point.x,p.grid))>1e-6||Math.abs(moved.z-snap(anchor.z+v.z-drag.point.z,p.grid))>1e-6;
     p.onMessage(result.valid&&drag.blocked?'已到墙边，松手放置或沿墙移动。':result.message);drawPreview(result.house,result.yieldId);p.onPreview?.(result.house);
    }
-   else if(!drag.id||p.house.rooms.some(r=>r.id===drag!.id)){const bounds=el.getBoundingClientRect();rect.hidden=false;const left=Math.min(e.clientX,drag.startX)-bounds.left,top=Math.min(e.clientY,drag.startY)-bounds.top;Object.assign(rect.style,{left:left+'px',top:top+'px',width:Math.abs(dx)+'px',height:Math.abs(dy)+'px'});let count=0;for(const f of p.house.items.filter(f=>f.roomId===p.roomId)){const v=project(f.x,f.h/2,f.z),inside=!f.locked&&v.x>=left&&v.x<=left+Math.abs(dx)&&v.y>=top&&v.y<=top+Math.abs(dy);if(inside)count++;const edge=outlines.get(f.id);if(edge)edge.visible=inside||p.selected.includes(f.id)||f.locked||!!warnings(p.house)[f.id];}rect.dataset.count=`${count} 件家具`;}
+   else{const bounds=el.getBoundingClientRect(),warn=warnings(p.house);rect.hidden=false;const left=Math.min(e.clientX,drag.startX)-bounds.left,top=Math.min(e.clientY,drag.startY)-bounds.top;Object.assign(rect.style,{left:left+'px',top:top+'px',width:Math.abs(dx)+'px',height:Math.abs(dy)+'px'});let count=0;for(const f of p.house.items.filter(f=>f.roomId===p.roomId)){const v=project(f.x,f.h/2,f.z),inside=!f.locked&&v.x>=left&&v.x<=left+Math.abs(dx)&&v.y>=top&&v.y<=top+Math.abs(dy);if(inside)count++;const edge=outlines.get(f.id);if(edge)edge.visible=inside||p.selected.includes(f.id)||f.locked||!!warn[f.id];}rect.dataset.count=`${count} 件家具`;}
   }
   function finish(cancel=false,e?:PointerEvent){
    if(!drag)return;const d=drag;drag=null;rect.hidden=true;controls.enabled=true;const p=latest.current;if(!p.mini){p.onPreview?.(null);p.onBusy?.(false);}
@@ -209,12 +210,21 @@ export default function Scene(props:Props){
    if(p.mini){if(!d.moved&&e){const {id}=hit(e);const r=p.house.rooms.find(r=>r.id===id)||p.house.rooms.find(r=>r.id===p.house.items.find(f=>f.id===id)?.roomId)||p.house.rooms.find(r=>r.id===p.house.doors.find(f=>f.id===id)?.roomId);if(r)p.onRoom?.(r.id);}return;}
    if(d.preview){if(!d.valid){drawPreview(p.house);p.onMessage(d.reason.replace('松手将恢复原位','已恢复拖动前的位置'));}
     else if(p.onCommit(d.preview))p.onMessage(d.yieldId?'已确认移动及让位，一次撤销可全部恢复。':d.blocked?'已停在墙内边界。':'已放置家具，可撤销调整。');}
-   else if(d.moved&&(!d.id||p.house.rooms.some(r=>r.id===d.id))&&e){const b=el.getBoundingClientRect(),x1=Math.min(d.startX,e.clientX)-b.left,x2=Math.max(d.startX,e.clientX)-b.left,y1=Math.min(d.startY,e.clientY)-b.top,y2=Math.max(d.startY,e.clientY)-b.top;const eligible=p.house.items.filter(f=>f.roomId===p.roomId&&!f.locked);const ids=eligible.filter(f=>{const v=project(f.x,f.h/2,f.z);return v.x>=x1&&v.x<=x2&&v.y>=y1&&v.y<=y2;}).map(f=>f.id);const previous=eligible.filter(f=>p.selected.includes(f.id)).map(f=>f.id);p.onSelect(d.add?[...new Set([...previous,...ids])]:ids);p.onMessage(`已框选 ${ids.length} 件家具，已跳过锁定物件。`);}
-   else if(!d.moved){const id=d.hitId,f=p.house.items.find(f=>f.id===id);if([...p.house.items,...p.house.doors,...p.house.windows].some(f=>f.id===id)){p.onSelect(d.add&&f?p.selected.includes(id)?p.selected.filter(x=>x!==id):[...p.selected,id]:[id]);p.onMessage(f?.locked?'已选中锁定家具，可查看属性或解锁。':'已选中，直接拖动可移动家具。');}else p.onSelect([]);}
-   else if(!d.id||p.house.rooms.some(r=>r.id===d.id))p.onSelect([]);
+   else if(d.moved&&!d.ids.length&&e){clickedItemId.current=undefined;const b=el.getBoundingClientRect(),x1=Math.min(d.startX,e.clientX)-b.left,x2=Math.max(d.startX,e.clientX)-b.left,y1=Math.min(d.startY,e.clientY)-b.top,y2=Math.max(d.startY,e.clientY)-b.top;const eligible=p.house.items.filter(f=>f.roomId===p.roomId&&!f.locked);const ids=eligible.filter(f=>{const v=project(f.x,f.h/2,f.z);return v.x>=x1&&v.x<=x2&&v.y>=y1&&v.y<=y2;}).map(f=>f.id);const previous=eligible.filter(f=>p.selected.includes(f.id)).map(f=>f.id);p.onSelect(d.add?[...new Set([...previous,...ids])]:ids);p.onMessage(`已框选 ${ids.length} 件家具，已跳过锁定物件。`);}
+   else if(!d.moved){
+    const id=d.hitId,f=p.house.items.find(f=>f.id===id);clickedItemId.current=!d.add&&p.tool==='select'&&!f?.locked?f?.id:undefined;
+    if(f||p.house.doors.some(door=>door.id===id)||p.house.windows.some(window=>window.id===id)){
+     p.onSelect(d.add&&f?p.selected.includes(id)?p.selected.filter(x=>x!==id):[...p.selected,id]:[id]);
+     p.onMessage(f?.locked?'已选中锁定家具，可查看属性或解锁。':clickedItemId.current?'已选中家具；再次按住拖动可移动。':f?'已选中家具。':'已选中门窗，可查看属性。');
+    }else p.onSelect([]);
+   }
    rebuild();
   }
-  const up=(e:PointerEvent)=>{if(e.button===0)finish(false,e);},cancel=()=>finish(true),key=(e:KeyboardEvent)=>{
+  const up=(e:PointerEvent)=>{
+   if(e.button!==0||e.pointerId!==drag?.pointerId)return;
+   if(!drag.moved&&Math.hypot(e.clientX-drag.startX,e.clientY-drag.startY)>5)move(e);
+   finish(false,e);
+  },cancel=(e:Event)=>{if(!('pointerId' in e)||e.pointerId===drag?.pointerId)finish(true);},key=(e:KeyboardEvent)=>{
    if(e.key!=='Escape'||latest.current.mini||latest.current.blocked||(e.target as HTMLElement)?.closest?.('input,textarea,select,[contenteditable]'))return;
    if(drag||rightOrbit?.isActive()||measureStart||measureRoot.children.length){e.preventDefault();e.stopImmediatePropagation();if(drag)finish(true);else if(rightOrbit?.isActive())rightOrbit.cancel();else{clear(measureRoot);measureStart=null;latest.current.onMessage('已取消测量。');}}
   };
@@ -240,7 +250,10 @@ export default function Scene(props:Props){
   loadFurnitureAssets().then(()=>{if(!disposed){setModelStatus('ready');rebuild();}}).catch(()=>{if(!disposed){setModelStatus('partial');rebuild();}});
   return()=>{disposed=true;envTarget.dispose();engine.current=null;cancelAnimationFrame(frame);resize.disconnect();window.removeEventListener('keydown',key,true);window.removeEventListener('blur',cancel);rightOrbit?.dispose();controls.dispose();dispose(scene);renderer.dispose();renderer.domElement.remove();rect.remove();};
  },[]);
- useEffect(()=>{engine.current?.rebuild();},[props.house,props.roomId,props.mode,props.mini?null:props.selected,props.mini?false:props.grid,props.mini?false:props.measure,props.realistic,props.advicePreview]);
+ useEffect(()=>{
+  if(props.selected.length!==1||props.selected[0]!==clickedItemId.current||!props.house.items.some(item=>item.id===clickedItemId.current&&item.roomId===props.roomId))clickedItemId.current=undefined;
+  engine.current?.rebuild();
+ },[props.house,props.roomId,props.mode,props.mini?null:props.selected,props.mini?false:props.grid,props.mini?false:props.measure,props.realistic,props.advicePreview,props.advicePreview?props.draft:null]);
  useEffect(()=>{engine.current?.reset();},[props.resetKey]);
  useEffect(()=>{engine.current?.reframe();},[props.insets]);
  useEffect(()=>{engine.current?.outlineView();},[props.view]);

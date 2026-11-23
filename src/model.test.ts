@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {alternateHouse,initialHouse,warnings,copy,corners,polygonOverlap,doorFrame,doorPoint,moveItems,validHouse,itemInsideRoom,roomOf,constrainHouse,WALL_INSET} from './model';
+import {alternateHouse,initialHouse,warnings,copy,corners,polygonOverlap,doorFrame,doorPoint,moveItems,validHouse,itemInsideRoom,roomOf,constrainHouse,CATALOG,WALL_INSET} from './model';
 import {PerspectiveCamera,Vector3} from 'three';
 import {bindRightOrbit} from './rightOrbit';
 import {defaultWorkspace,restoreWorkspace} from './projects';
@@ -9,9 +9,58 @@ import {roomHeight,doorHeight,windowHeight,windowSill,wallSections} from './arch
 import {previewMove,addedConflicts,placeCopies} from './placement';
 import {applyLayoutChanges,applyLayoutMove,exactRelativeMove,explicitTargets,findLayoutMoves,itemLabel,makeLayoutContext,makeLayoutProposal,measurePreviousRoomSuggestion,measurePreviousSuggestion,protectedIds,readLayoutContext,wallPlacementAdvice,wallReference} from './layoutAdvice';
 import {currentDoorStatus,doorOpeningAdvice} from './doorAdvice';
-import {executeLayoutIntent} from '../server/layout-intent';
+import {executeLayoutIntent,readLayoutIntent} from '../server/layout-intent';
 import {optimizeRoom,roomProposal} from './roomLayout';
 import {assessRoomUse,frontClearance,sofaClearance} from './roomUsability';
+import {applyRoomEdit,readRoomEdit} from './roomEdits';
+
+test('AI 添加使用目录中的尺寸，避开原有家具和开门范围，验证时不会修改原布局',()=>{
+ const house=initialHouse(),room=roomOf(house,'living'),base=copy(house);
+ const context=makeLayoutContext(house,room.id,[],'balanced','');
+ const intent=readLayoutIntent('{"mode":"edit","action":"addFurniture","furnitureKind":"chair","wall":"north","windowId":"window-living","w":0.01}');
+ assert.ok(intent);
+ const advice=executeLayoutIntent(intent,context,'在北窗旁加一把椅子');
+ assert.equal(advice.kind,'roomEdit');
+ if(advice.kind!=='roomEdit'||advice.edit.action!=='addFurniture')return assert.fail('缺少添加建议');
+ const draft=applyRoomEdit(house,room.id,advice.edit);
+ if('error' in draft)return assert.fail(draft.error);
+ assert.deepEqual(house,base);
+ assert.deepEqual(draft.house.items.slice(0,-1),base.items);
+ const added=draft.house.items.at(-1)!;
+ assert.equal(added.roomId,room.id);
+ assert.equal(added.w,CATALOG.chair.w);
+ assert.ok(itemInsideRoom(added,room));
+ assert.ok(Math.abs(Math.min(...corners(added).map(point=>point[1]))-(room.z-room.d/2+WALL_INSET))<1e-6);
+ assert.equal(warnings(draft.house)[added.id],undefined);
+ assert.ok('error' in applyRoomEdit(draft.house,room.id,advice.edit));
+ assert.ok('error' in applyRoomEdit(house,room.id,{...advice.edit,x:house.items[0].x,z:house.items[0].z}));
+ assert.ok('error' in applyRoomEdit(house,room.id,{...advice.edit,x:room.x+room.w,z:room.z}));
+ const door=house.doors[0],frame=doorFrame(house,door);
+ assert.ok('error' in applyRoomEdit(house,room.id,{...advice.edit,x:frame.hx+.4,z:frame.hz+.4}));
+});
+
+test('AI 添加找不到指定墙边的合法空位时只回复说明',()=>{
+ const house=initialHouse(),room=roomOf(house,'living');
+ const context=makeLayoutContext(house,room.id,[],'balanced','');
+ context.room={...room,w:1,d:1};context.items=[];context.doors=[];context.windows=[];
+ const result=executeLayoutIntent({mode:'edit',action:'addFurniture',furnitureKind:'sofa',wall:'north'},context,'在北墙边添加沙发');
+ assert.equal(result.kind,'text');
+ assert.match(result.reply,/没有找到/);
+});
+
+test('AI 换墙面只改当前房间，拒绝未知墙皮、无变化或跨房间应用',()=>{
+ const house=initialHouse(),room=roomOf(house,'living'),base=copy(house);
+ const context=makeLayoutContext(house,room.id,[],'balanced','');
+ const advice=executeLayoutIntent({mode:'edit',action:'wallMaterial',wallMaterial:'ivory'},context,'把墙面换成暖白漆');
+ if(advice.kind!=='roomEdit'||advice.edit.action!=='wallMaterial')return assert.fail('缺少墙面建议');
+ const draft=applyRoomEdit(house,room.id,advice.edit);
+ if('error' in draft)return assert.fail(draft.error);
+ assert.deepEqual(house,base);
+ assert.deepEqual(draft.house,{...base,rooms:base.rooms.map(value=>value.id===room.id?{...value,wallMaterial:'ivory'}:value)});
+ assert.equal(executeLayoutIntent({mode:'edit',action:'wallMaterial',wallMaterial:'unknown'},context,'更换未知墙纸').kind,'text');
+ assert.ok('error' in applyRoomEdit(draft.house,room.id,advice.edit));
+ assert.equal(readRoomEdit({...advice.edit,roomId:'bedroom'},room.id),undefined);
+});
 
 test('中央腾空也会拒绝朝墙且难以入座的沙发落点',()=>{
  const house=initialHouse(),room=roomOf(house,'living');
@@ -401,7 +450,17 @@ test('示例户型无家具重叠、越界或挡门',()=>{assert.deepEqual(warni
 test('新增两居房型格式有效且无重叠、穿墙或挡门',()=>{const w=defaultWorkspace();assert.ok(validHouse(w.projects.sky));assert.deepEqual(warnings(w.projects.sky),{});assert.notDeepEqual(w.projects.forest.rooms,w.projects.sky.rooms);});
 test('两个房型编辑和存档独立，保存后恢复当前房型',()=>{const w=defaultWorkspace(),original=copy(w.projects.sky);w.projects.forest=moveItems(w.projects.forest,['sofa'],.2,.2,true);assert.deepEqual(w.projects.sky,original);w.activePlanId='sky';const restored=restoreWorkspace(JSON.parse(JSON.stringify(w)),null);assert.equal(restored.recovered,true);assert.equal(restored.workspace.activePlanId,'sky');assert.deepEqual(restored.workspace.projects,w.projects);});
 test('旧单房型存档迁移时保留原家具并补充第二房型',()=>{const old=initialHouse();old.name='我的旧布局';old.items[0].locked=true;const restored=restoreWorkspace(null,old);assert.equal(restored.workspace.projects.forest.name,'我的旧布局');assert.equal(restored.workspace.projects.forest.items[0].locked,true);assert.equal(restored.workspace.projects.sky.name,'晴空两居');});
-test('选择工具直接拖动家具，专用框选工具从任意位置框选',()=>{const f=initialHouse().items[0];assert.equal(furnitureDragAction(f,[],'select'),'move');assert.equal(furnitureDragAction(f,[f.id],'select'),'move');assert.equal(furnitureDragAction(f,[f.id],'box'),'box');assert.equal(furnitureDragAction(undefined,[f.id],'select'),'box');});
+test('只有在画布单击选中一件未锁定家具后才能拖动，否则左键拖动框选',()=>{
+ const item=initialHouse().items[0];
+ assert.equal(furnitureDragAction(item,[],'select'),'box');
+ assert.equal(furnitureDragAction(item,[item.id],'select'),'box');
+ assert.equal(furnitureDragAction(item,[item.id],'select',false,item.id),'move');
+ assert.equal(furnitureDragAction(item,[item.id,'chair'],'select',false,item.id),'box');
+ assert.equal(furnitureDragAction(item,[item.id],'box',false,item.id),'box');
+ assert.equal(furnitureDragAction(item,[item.id],'select',true,item.id),'box');
+ assert.equal(furnitureDragAction({...item,locked:true},[item.id],'select',false,item.id),'box');
+ assert.equal(furnitureDragAction(undefined,[item.id],'select',false,item.id),'box');
+});
 test('锁定或按住 Shift 时不触发家具移动',()=>{const f=initialHouse().items[0];assert.equal(furnitureDragAction(f,[f.id],'select',true),'box');f.locked=true;assert.equal(furnitureDragAction(f,[f.id],'select'),'box');});
 test('房间材质随房型存档往返且不污染其他房间',()=>{const w=defaultWorkspace(),other=copy(w.projects.forest.rooms[1]);w.projects.forest.rooms[0].floorMaterial='walnut';w.projects.forest.rooms[0].wallMaterial='brick';const restored=restoreWorkspace(JSON.parse(JSON.stringify(w)),null);assert.equal(restored.workspace.projects.forest.rooms[0].floorMaterial,'walnut');assert.equal(restored.workspace.projects.forest.rooms[0].wallMaterial,'brick');assert.deepEqual(restored.workspace.projects.forest.rooms[1],other);assert.equal(restored.workspace.projects.sky.rooms[0].floorMaterial,undefined);});
 test('旧版无材质字段兼容，非法材质拒绝导入',()=>{const h=initialHouse();assert.ok(validHouse(h));(h.rooms[0] as unknown as {floorMaterial:string}).floorMaterial='remote-url';assert.equal(validHouse(h),false);});

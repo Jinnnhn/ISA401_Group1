@@ -1,8 +1,9 @@
 import {doorOpeningAdvice} from '../src/doorAdvice';
 import {exactRelativeMove,findLayoutMoves,isRecord,itemLabel,makeLayoutProposal,protectedIds,roomObjectives,wallPlacementAdvice,type Advice,type Goal,type LayoutContext,type RoomObjective} from '../src/layoutAdvice';
 import {optimizeRoom,roomProposal} from '../src/roomLayout';
+import {makeRoomEditAdvice} from '../src/roomEdits';
 
-const modes=['discuss','clarify','single','room','repeat','door'] as const;
+const modes=['discuss','clarify','single','room','repeat','door','edit'] as const;
 const goals:readonly Goal[]=['center','door','conversation','position','align','wall'];
 const walls=['north','south','east','west'] as const;
 const directions={north:'北',south:'南',east:'东',west:'西'};
@@ -11,7 +12,8 @@ export function readLayoutIntent(content:string):Record<string,unknown>|undefine
   try{
     const value:unknown=JSON.parse(content);
     if(isRecord(value)&&modes.some(mode=>mode===value.mode)
-      &&(value.mode!=='room'||typeof value.reviewOnly==='boolean'))return value;
+      &&(value.mode!=='room'||typeof value.reviewOnly==='boolean')
+      &&(value.mode!=='edit'||value.action==='addFurniture'||value.action==='wallMaterial'))return value;
   }catch{return;}
 }
 
@@ -34,6 +36,10 @@ export function executeLayoutIntent(intent:Record<string,unknown>,context:Layout
     return candidates&&candidates.length>1
       ? {kind:'clarify',candidateIds:candidates,reply:reply||'你指的是哪件家具？'}
       : text(reply||'请告诉我想调整哪件家具或优先改善哪块空间。');
+  }
+  if(intent.mode==='edit'){
+    if(intent.roomId!==undefined&&intent.roomId!==context.room.id)return text('只能为当前房间生成改动建议，请先切换到要编辑的房间。');
+    return makeRoomEditAdvice(context,intent);
   }
 
   const namedPreserve=idsFrom(intent.preserveIds,context);

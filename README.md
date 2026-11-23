@@ -80,7 +80,7 @@ For door-swing checks, the assistant uses the editor's collision calculation. A 
 - Replace, copy, delete, lock, or unlock furniture.
 - Preserve the original position and orientation when replacing furniture; reject replacements that introduce overlaps, block doors, or exceed room boundaries.
 - Clearly indicate whether furniture is locked.
-- Support batch movement, deletion, and locking. Disable incompatible property actions when the current selection cannot perform them together.
+- Support batch rotation, alignment, deletion, and locking. Disable incompatible property actions for locked furniture.
 
 ### Floor-Plan and Room Management
 
@@ -106,7 +106,7 @@ For door-swing checks, the assistant uses the editor's collision calculation. A 
 - Open the space assistant from the toolbar or the chat panel at the bottom.
 - The assistant floats above the canvas without reducing the canvas size. It has a maximum width of **680 px** and a maximum height of **220 px**.
 - Drag the assistant's title bar to reposition it within the editing area.
-- Ask for more central space, space around a door, a conversation arrangement, or a move toward a specific location. Use the preference menu and an optional text constraint. The search covers positions sampled in the current room and handles one furniture move per suggestion.
+- Ask the assistant to adjust one or more pieces of furniture, add one catalog item, or change the current room’s wall material. For example, try “在北窗旁加一把椅子” or “把墙面换成暖白漆”. Preview and apply each change separately.
 - If several pieces of furniture share a name, choose the intended object in the canvas or in the suggestion card. Preview shows the original footprint and proposed position. Apply is an explicit action. Dismissing the card cancels the preview, and a layout change requires regenerating the suggestion.
 
 ## Interaction Design
@@ -116,8 +116,8 @@ For door-swing checks, the assistant uses the editor's collision calculation. A 
 | Action | Behavior |
 | --- | --- |
 | Left-click furniture | Select it and show its properties. Locked furniture can also be selected individually. |
-| Left-drag already-selected furniture | Move it, or move the selected group while preserving relative positions. |
-| Left-drag from empty space or unselected furniture | Draw a dashed selection box instead of immediately moving furniture. |
+| Left-drag a single piece just selected by clicking it | Move that piece. Click it first if it was selected with a marquee or in the object list. |
+| Left-drag elsewhere, including from furniture | Draw a dashed selection box. |
 | Use the marquee tool | Start a selection box from any point on the canvas. |
 | Shift + left-click | Add or remove furniture from the selection. |
 | Right-click selected furniture | Remove that furniture from the selection; other selected furniture remain selected. |
@@ -125,7 +125,7 @@ For door-swing checks, the assistant uses the editor's collision calculation. A 
 | Middle-drag | Pan the view horizontally and vertically. |
 | Mouse wheel | Zoom in or out. |
 
-A movement threshold distinguishes a click from a drag. **Furniture must be selected with a separate click before it can be dragged.** Locked furniture are excluded from marquee selection but remain individually clickable for inspection and unlocking.
+A movement threshold distinguishes a click from a drag. When one piece is selected, the upper toolbar offers rotate, replace and delete. Locked furniture is excluded from marquee selection but remains individually clickable for inspection and unlocking.
 
 ### Object Feedback and Placement
 
@@ -227,7 +227,7 @@ The latest automated suite contains **32 tests**. Earlier browser-check details 
 - 默认隐藏右侧属性和低高度窗口的小地图，空间助手收为紧凑输入条。选择家具时打开属性；点击空白或 Esc 可收起。撤销重做合并到顶部，工具栏、地图、视图控制和助手采用独立停靠区域。
 - 相机投影按未遮挡区域居中，“适配当前房间”依据实际可见面积取景。每个房间的编辑视角与室内预览视角分别记忆。
 - 室内预览只读：隐藏编辑工具，阻止 Delete、R、复制、撤销等编辑快捷键。退出后恢复原编辑模式、选择、面板状态和视角。
-- 选择工具直接拖家具、空白处框选；专用框选工具可从任意位置开始。单击和拖动以 5 px 阈值区分。锁定家具拖动不会误触框选。
+- 左键拖动默认框选，即使从家具上开始也可以。用选择工具单击选中一件未锁定的家具后，再从它上面拖动才会移动。只选中一件时，上方提供旋转、替换和删除。
 - 让位采用确定性网格搜索和位置过渡，仅一件未锁定家具移动，无物理模拟或连锁推挤。多选不触发让位；一次撤销恢复被拖家具及让位家具。地图同步临时布局，Esc 一并恢复。
 - 旋转、替换、坐标与尺寸输入不接受新增的家具重叠或挡门冲突。复制会寻找附近有效空位，找不到则保持原布局。已有存档中的冲突不会静默删除，仍可手动修正。
 - Esc 优先处理拖动、视角手势、测量，再处理当前弹窗、室内预览、展开助手、工具模式，最后清除选择。数值输入中的 Esc 仅恢复当前字段。

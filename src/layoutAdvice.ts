@@ -1,4 +1,5 @@
 import {corners, doorFrame, itemBlocksDoor, itemInsideRoom, polygonOverlap, validHouse, WALL_INSET, type Door, type House, type Item, type Kind} from './model';
+import type {RoomEditAdvice} from './roomEdits';
 
 export const layoutPreferences = {balanced:'按本次要求', passage:'通行优先', hosting:'会客优先'} as const;
 export type LayoutPreference = keyof typeof layoutPreferences;
@@ -10,12 +11,13 @@ export type PreviousRoomSuggestion = {changes:Move[]; objective:RoomObjective; p
 export type LayoutContext = {room:House['rooms'][number]; items:Item[]; doors:House['doors']; windows:House['windows']; selectedIds:string[]; preference:LayoutPreference; custom:string; confirmedId?:string; previousSuggestion?:PreviousSuggestion; previousRoomSuggestion?:PreviousRoomSuggestion};
 export type MoveExplanation = {movement:string; reason:string; impact:string; details:string[]};
 export type RoomProposal = {kind:'roomProposal'; reply:string; objective:RoomObjective; objectiveLabel:string; preserveIds:string[]; changes:Move[]; explanations:MoveExplanation[]};
-export type AdviceDraft = Move|RoomProposal;
+export type AdviceDraft = Move|RoomProposal|RoomEditAdvice;
 export type Advice =
   | {kind:'text'; reply:string; keepSuggestion?:boolean}
   | {kind:'clarify'; reply:string; candidateIds:string[]}
   | {kind:'proposal'; reply:string; moves:Move[]; explanations:MoveExplanation[]}
-  | RoomProposal;
+  | RoomProposal
+  | RoomEditAdvice;
 
 export function makeLayoutContext(house:House, roomId:string, selectedIds:string[], preference:LayoutPreference, custom:string, confirmedId?:string, previousSuggestion?:PreviousSuggestion, previousRoomSuggestion?:PreviousRoomSuggestion):LayoutContext {
   const {id,name,x,z,w,d,height,floorMaterial,wallMaterial} = house.rooms.find(room=>room.id===roomId)!;

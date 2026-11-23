@@ -104,3 +104,39 @@
   .assistant-preferences input { font-size: 12px; }
   .assistant-result { max-height: 135px; }
 }
+
+.selection-actions {
+  position: absolute;
+  top: 76px;
+  left: calc((100% + var(--assistant-left) - var(--panel-right)) / 2);
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  max-width: calc(100% - var(--assistant-left) - var(--panel-right) - 12px);
+  padding: 4px;
+  white-space: nowrap;
+}
+.selection-actions-name {
+  min-width: 0;
+  max-width: 100px;
+  padding: 0 8px;
+  border-right: 1px solid #e4e8de;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ui-muted);
+  font-size: 12px;
+}
+.selection-actions button { flex-shrink: 0; gap: 5px; min-height: 32px; padding: 4px 7px; border-radius: 6px; font-size: 12px; }
+.selection-actions button.danger:hover:not(:disabled) { background: #f9efe9; }
+@media (min-width: 651px) and (max-width: 1200px) {
+  .workspace:has(.selection-actions) .room-warning { top: 122px; }
+}
+@media (max-width: 650px) {
+  .selection-actions { top: 66px; left: 62px; transform: none; max-width: calc(100% - 72px); }
+  .selection-actions-name { padding: 0 5px; }
+  .selection-actions button { padding: 4px 5px; }
+  .workspace:has(.selection-actions) .properties, .workspace:has(.selection-actions) .properties-reopen { top: 114px; }
+  .workspace:has(.selection-actions) .room-warning { top: 155px; }
+}
