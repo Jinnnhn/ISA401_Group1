@@ -1,9 +1,9 @@
 import {applyLayoutChanges,contextHouse,doorLabel,footprintGap,itemLabel,placementBounds,type Advice,type LayoutContext,type Move,type MoveExplanation,type RoomObjective} from './layoutAdvice';
 import {corners,doorSweep,itemInsideRoom,polygonOverlap,warnings,type Item} from './model';
-import {assessRoomUse,frontTarget,isSeat,passageWidth,seatingLoss,seatObstructionPenalty,seatWallPenalty,tableRelationship} from './roomUsability';
+import {accessLabel,assessRoomUse,frontTarget,furnitureAccessLoss,isSeat,passageLoss,passageWidth,seatingLoss,seatObstructionPenalty,seatWallPenalty,tableRelationship} from './roomUsability';
 
 const objectiveLabels:Record<RoomObjective,string>={
-  balanced:'兼顾入座、茶几摆放和进门通行，适当增加中央留白',
+  balanced:'兼顾家具使用、取放和进出通行',
   center:'保留入座和通行空间，增加中央留白',
   door:'清出门扇开启范围，改善进门通行',
   hosting:'改善入座空间和茶几摆放',
@@ -13,8 +13,10 @@ type Footprint=ReturnType<typeof corners>;
 type Placement={item:Item; shape:Footprint; center:bigint; distance:number; cost:number; wallPenalty:number};
 type State={places:Placement[]; center:bigint; cost:number; useCost:number; rank:number};
 type RoomUse=ReturnType<typeof assessRoomUse>;
+type ChairSurfacePair={chairId:string;surfaceId:string;kind:'table'|'desk';gap:number;facing:boolean;target:number};
 
 const gridSize=12;
+const chairReachSlack=.035;
 const floorArea=(value:number)=>`${value.toFixed(2)} 平方米`;
 const distanceLabel=(value:number)=>value<1?`${Math.round(value*100)} 厘米`:`${value.toFixed(2)} 米`;
 
@@ -42,30 +44,50 @@ function centerMeasure(room:LayoutContext['room']){
   return {mask,area:width*depth,occupied:(bits:bigint)=>countCells(bits)*width*depth/cells.length};
 }
 
-function preserveDeskGroups(items:Item[]){
-  const links=new Map<string,Map<string,number>>();
-  for(const seat of items.filter(isSeat)){
-    const companions=items.filter(item=>item.kind==='desk');
-    const nearest=companions.map(item=>({item,gap:footprintGap(seat,item)})).sort((a,b)=>a.gap-b.gap)[0];
-    if(!nearest||nearest.gap<.05||nearest.gap>.75)continue;
-    links.set(seat.id,new Map([[nearest.item.id,nearest.gap]]));
-  }
-  return (first:Item,second:Item)=>{
-    const former=links.get(first.id)?.get(second.id)??links.get(second.id)?.get(first.id);
-    if(former===undefined)return 0;
-    const gap=footprintGap(first,second);
-    // Allow modest spacing changes while discouraging moving one half of an existing group across the room.
-    return Math.max(0,gap-former-.2)*.4;
-  };
+function facesTable(chair:Item,table:Item){
+  const {forward,side}=tableRelationship(chair,table);
+  return forward>=side*.18;
 }
 
-function reducedRoomUse(context:LayoutContext,before:RoomUse,after:RoomUse){
+export function chairSurfacePairs(items:Item[]){
+  const surfaces=items.filter(item=>item.kind==='table'||item.kind==='desk');
+  const sofas=items.filter(item=>item.kind==='sofa');
+  const pairs=new Map<string,ChairSurfacePair>();
+  for(const chair of items.filter(item=>item.kind==='chair')){
+    const candidates=surfaces.flatMap(surface=>{
+      const gap=footprintGap(chair,surface);
+      const nearby=gap<=.80||(surface.kind==='table'&&gap<=1.20
+        &&sofas.some(sofa=>footprintGap(chair,sofa)<=.85&&footprintGap(sofa,surface)<=.85));
+      if(!nearby)return [];
+      const facing=facesTable(chair,surface);
+      return [{surface,gap,facing,rank:gap+(facing?0:.20)}];
+    });
+    const nearest=candidates.sort((a,b)=>a.rank-b.rank)[0];
+    if(!nearest)continue;
+    const kind=nearest.surface.kind==='desk'?'desk':'table';
+    pairs.set(chair.id,{chairId:chair.id,surfaceId:nearest.surface.id,kind,gap:nearest.gap,facing:nearest.facing,
+      target:kind==='desk'?.42:.72});
+  }
+  return pairs;
+}
+
+function reducedRoomUse(context:LayoutContext,before:RoomUse,after:RoomUse,items:Item[],pairs:Iterable<ChairSurfacePair>){
   const seat=seatingLoss(before,after);
   if(seat)return `这个落点会缩小${itemLabel(context.items,seat.item.id)}前方的可用空间。`;
   if(before.table&&after.table&&after.table.penalty>Math.max(.12,before.table.penalty+.045)){
     return '这个方案会让茶几偏离沙发正面，或者变得不方便取放。';
   }
-  const lost=before.passages.find(({door,reachable})=>reachable&&!after.passages.some(result=>result.door.id===door.id&&result.reachable));
+  const lostAccess=furnitureAccessLoss(before.access,after.access);
+  if(lostAccess)return `这个方案会挤窄${itemLabel(context.items,lostAccess.item.id)}的${accessLabel[lostAccess.kind]}空间。`;
+  for(const pair of pairs){
+    const chair=items.find(item=>item.id===pair.chairId)!;
+    const table=items.find(item=>item.id===pair.surfaceId)!;
+    const gap=footprintGap(chair,table);
+    if(gap>Math.max(pair.target,pair.gap)+chairReachSlack||(pair.facing&&!facesTable(chair,table))){
+      return `这个方案会让${itemLabel(context.items,chair.id)}与${itemLabel(context.items,table.id)}的相对位置不利于${pair.kind==='desk'?'坐下后使用书桌':'坐下后取放'}。`;
+    }
+  }
+  const lost=passageLoss(before.passages,after.passages);
   if(lost)return `这个方案会缩窄${doorLabel(lost.door,context.doors)}通向房间中央的通路。`;
 }
 
@@ -76,6 +98,9 @@ function remainingUseIssues(context:LayoutContext,use:RoomUse){
   const notes=[];
   if(seat)notes.push(`${itemLabel(context.items,seat.item.id)}前方可用深度约 ${distanceLabel(seat.depth)}，入座空间仍偏小。`);
   if(use.table&&use.table.penalty>.12)notes.push('茶几与沙发前方的相对位置仍不便于取放。');
+  for(const access of use.access)if(access.depth+.01<access.target){
+    notes.push(`${itemLabel(context.items,access.item.id)}的${accessLabel[access.kind]}空间仍偏小。`);
+  }
   if(route){
     const label=doorLabel(route.door,context.doors);
     notes.push(route.door.width<passageWidth
@@ -102,7 +127,7 @@ function candidatePoints(item:Item,room:LayoutContext['room'],items:Item[]){
     ...axis(bounds.minX,bounds.maxX,item.x).flatMap(x=>axis(bounds.minZ,bounds.maxZ,item.z).map(z=>({x,z})))];
 }
 
-function explainChanges(context:LayoutContext,moves:Move[],after:Item[],beforeUse:RoomUse,afterUse:RoomUse,center:ReturnType<typeof centerMeasure>):MoveExplanation[]{
+function explainChanges(context:LayoutContext,moves:Move[],after:Item[],beforeUse:RoomUse,afterUse:RoomUse,center:ReturnType<typeof centerMeasure>,pairs:Map<string,ChairSurfacePair>):MoveExplanation[]{
   const house=contextHouse(context), oldWarnings=warnings(house);
   return moves.map(move=>{
     const original=context.items.find(item=>item.id===move.itemId)!;
@@ -121,7 +146,11 @@ function explainChanges(context:LayoutContext,moves:Move[],after:Item[],beforeUs
     else if(oldSeat&&newSeat&&newSeat.depth>oldSeat.depth+.08)reason='给座位正面留出更多入座空间。';
     else if(improvedTable)reason='让茶几更靠近沙发正前方，方便坐下后取放物品。';
     else if(center.occupied(center.mask(original))-center.occupied(center.mask(item))>.03)reason='减少这件家具在房间中央的占用。';
-    const closest=after.filter(other=>other.id!==item.id).map(other=>({other,gap:footprintGap(item,other)})).sort((a,b)=>a.gap-b.gap)[0];
+    const linkedTable=pairs.get(item.id)?.surfaceId??(item.id===beforeUse.sofa?.id?beforeUse.table?.item.id:undefined);
+    const linkedChair=[...pairs.values()].find(pair=>pair.surfaceId===item.id)?.chairId;
+    const relevantId=linkedTable??linkedChair;
+    const closest=after.filter(other=>other.id!==item.id&&(!relevantId||other.id===relevantId))
+      .map(other=>({other,gap:footprintGap(item,other)})).sort((a,b)=>a.gap-b.gap)[0];
     let impact='最终位置通过家具重叠、墙内边界和开门范围检查。';
     if(closest&&closest.gap<2){
       const former=context.items.find(other=>other.id===closest.other.id)!;
@@ -137,19 +166,30 @@ export function roomProposal(context:LayoutContext,objective:RoomObjective,chang
   if('error' in final)return {kind:'text',reply:final.error};
   const beforeUse=assessRoomUse(contextHouse(context),context.room);
   const afterUse=assessRoomUse(final.house,context.room);
-  const worse=reducedRoomUse(context,beforeUse,afterUse);
+  const chairPairs=chairSurfacePairs(context.items);
+  const worse=reducedRoomUse(context,beforeUse,afterUse,final.house.items,chairPairs.values());
   if(worse)return {kind:'text',reply:`${worse}请按当前布局重新生成方案。`};
   const measure=centerMeasure(context.room);
   const occupied=(items:Item[])=>measure.occupied(items.reduce((mask,item)=>mask|measure.mask(item),0n));
   const before=occupied(context.items),after=occupied(final.house.items);
-  const comparison=Math.abs(before-after)>=.025?`中央区域的家具占用估计由 ${floorArea(before)} 变为 ${floorArea(after)}。`:'';
+  const comparison=(objective==='center'||(!beforeUse.table&&!chairPairs.size&&!beforeUse.access.length))&&Math.abs(before-after)>=.025
+    ?`中央区域的家具占用估计由 ${floorArea(before)} 变为 ${floorArea(after)}。`:'';
   const sofa=afterUse.seats.find(({item})=>item.id===afterUse.sofa?.id);
   const seat=sofa?`沙发前方可用深度${sofa.depth>=.8?'至少 ': '约 '}${distanceLabel(sofa.depth)}。`:'';
   const route=passageConfirmation(afterUse);
+  const movedIds=new Set(changes.map(change=>change.itemId));
+  const changedPair=[...chairPairs.values()].find(pair=>movedIds.has(pair.chairId)||movedIds.has(pair.surfaceId));
+  const reach=changedPair?`${itemLabel(context.items,changedPair.chairId)}与${itemLabel(context.items,changedPair.surfaceId)}的边缘间距约 ${distanceLabel(footprintGap(
+    final.house.items.find(item=>item.id===changedPair.chairId)!,final.house.items.find(item=>item.id===changedPair.surfaceId)!))}。`:'';
+  const improvedAccess=beforeUse.access.flatMap(original=>{
+    const after=afterUse.access.find(value=>value.item.id===original.item.id)!;
+    return original.depth+.08<Math.min(after.depth,after.target)?[{original,after}]:[];
+  })[0];
+  const access=improvedAccess?`${itemLabel(context.items,improvedAccess.after.item.id)}的${accessLabel[improvedAccess.after.kind]}深度估计由 ${distanceLabel(improvedAccess.original.depth)} 增至${improvedAccess.after.depth>=.8?'至少 ': '约 '}${distanceLabel(improvedAccess.after.depth)}。`:'';
   const notes=remainingUseIssues(context,afterUse);
   return {kind:'roomProposal',objective,objectiveLabel:objectiveLabels[objective],preserveIds,changes,
-    reply:`建议调整 ${changes.length} 件家具。${comparison}${seat}${route}${notes}`,
-    explanations:explainChanges(context,changes,final.house.items,beforeUse,afterUse,measure)};
+    reply:`建议调整 ${changes.length} 件家具。${reach}${access}${seat}${route}${notes}${comparison}`,
+    explanations:explainChanges(context,changes,final.house.items,beforeUse,afterUse,measure,chairPairs)};
 }
 
 export function optimizeRoom(context:LayoutContext,objective:RoomObjective,preserveIds:string[],evaluateOnly=false):Advice {
@@ -158,7 +198,10 @@ export function optimizeRoom(context:LayoutContext,objective:RoomObjective,prese
   const baseline=warnings(house);
   const hasConflicts=Object.keys(baseline).length>0;
   const beforeUse=assessRoomUse(house,room);
-  const useIssues=remainingUseIssues(context,beforeUse);
+  const chairPairs=chairSurfacePairs(items);
+  const distantPair=[...chairPairs.values()].find(pair=>pair.gap>pair.target+.06);
+  const pairIssue=distantPair?`${itemLabel(items,distantPair.chairId)}与${itemLabel(items,distantPair.surfaceId)}的间距偏大。`:'';
+  const useIssues=remainingUseIssues(context,beforeUse)+pairIssue;
   const summary=hasConflicts?`当前${room.name}有 ${items.filter(item=>baseline[item.id]).length} 件家具涉及重叠、越界或挡门。`:'当前家具通过墙内边界、重叠和开门范围检查。';
   const fixed=items.filter(item=>item.locked||preserveIds.includes(item.id));
   const fixedWarnings=warnings({...house,items:fixed});
@@ -178,15 +221,21 @@ export function optimizeRoom(context:LayoutContext,objective:RoomObjective,prese
   if(!hasConflicts&&objective!=='hosting'&&beforeBits===0n&&!useIssues)return keep();
   const doorShapes=context.doors.map(door=>doorSweep(house,door));
   const fixedShapes=fixed.map(corners);
-  const centerWeight=objective==='door'||objective==='hosting'?0:objective==='center'?.65:.45;
+  const hasFunction=!!beforeUse.table||chairPairs.size>0||beforeUse.access.length>0;
+  const centerWeight=objective==='center'?.65:objective==='balanced'?hasFunction?.06:.45:0;
   const width=items.length>20?12:44;
   const fixedBits=fixed.reduce((mask,item)=>mask|center.mask(item),0n);
-  const groupPenalty=preserveDeskGroups(items);
   const isMainPair=(first:Item,second:Item)=>first.id===beforeUse.sofa?.id&&second.id===beforeUse.table?.item.id;
   const pairPenalty=(first:Item,firstShape:Footprint,second:Item,secondShape:Footprint)=>{
     const tablePenalty=isMainPair(first,second)?tableRelationship(first,second).penalty
       :isMainPair(second,first)?tableRelationship(second,first).penalty:0;
-    return groupPenalty(first,second)+seatObstructionPenalty(first,firstShape,second,secondShape)*.8+Math.min(2,tablePenalty);
+    const firstPair=chairPairs.get(first.id),secondPair=chairPairs.get(second.id);
+    const pair=firstPair?.surfaceId===second.id?firstPair:secondPair?.surfaceId===first.id?secondPair:undefined;
+    const chair=pair?.chairId===first.id?first:second;
+    const table=chair===first?second:first;
+    const reachCost=pair?Math.max(0,footprintGap(chair,table)-pair.target)*.9+
+      (pair.facing&&!facesTable(chair,table)?.5:0):0;
+    return seatObstructionPenalty(first,firstShape,second,secondShape)*.8+Math.min(2,tablePenalty)+reachCost;
   };
   let states:State[]=[{places:[],center:fixedBits,cost:0,useCost:0,rank:centerWeight*center.occupied(fixedBits)}];
   const ordered=[...movable].sort((a,b)=>Number(!!baseline[b.id])-Number(!!baseline[a.id])||b.w*b.d-a.w*a.d);
@@ -224,17 +273,29 @@ export function optimizeRoom(context:LayoutContext,objective:RoomObjective,prese
   let candidate:State|undefined,bestScore=Infinity;
   for(const state of states){
     if(!state.places.some(place=>place.distance>.001))continue;
-    const afterUse=assessRoomUse({...house,items:[...fixed,...state.places.map(place=>place.item)]},room);
-    if(reducedRoomUse(context,beforeUse,afterUse))continue;
+    const placed=[...fixed,...state.places.map(place=>place.item)];
+    const afterUse=assessRoomUse({...house,items:placed},room);
+    if(reducedRoomUse(context,beforeUse,afterUse,placed,chairPairs.values()))continue;
     const restored=afterUse.passages.filter(({door,reachable})=>reachable&&beforeUse.passages.some(result=>result.door.id===door.id&&!result.reachable)).length;
     const seatGain=afterUse.seats.reduce((sum,{item,depth})=>{
       const original=beforeUse.seats.find(seat=>seat.item.id===item.id)!.depth;
       return sum+Math.min(depth,frontTarget(item))-Math.min(original,frontTarget(item));
     },0);
     const tableGain=(beforeUse.table?.penalty??0)-(afterUse.table?.penalty??0);
+    const chairGain=[...chairPairs.values()].reduce((sum,pair)=>{
+      const chair=placed.find(item=>item.id===pair.chairId)!;
+      const table=placed.find(item=>item.id===pair.surfaceId)!;
+      return sum+Math.max(0,pair.gap-pair.target)-Math.max(0,footprintGap(chair,table)-pair.target);
+    },0);
+    const accessGain=afterUse.access.reduce((sum,result)=>{
+      const original=beforeUse.access.find(value=>value.item.id===result.item.id)!;
+      return sum+Math.min(result.depth,result.target)-Math.min(original.depth,original.target);
+    },0);
     const centerGain=center.occupied(beforeBits)-center.occupied(state.center);
-    const score=state.cost+state.useCost-centerWeight*centerGain-restored*2-seatGain;
-    const improves=(centerGain>=minimumGain&&centerWeight*centerGain>state.cost)||seatGain>.08||tableGain>.18||restored>0;
+    const score=state.cost+state.useCost-centerWeight*centerGain-restored*2-seatGain-chairGain-accessGain;
+    const prioritizeCenter=objective==='center'||(objective==='balanced'&&!hasFunction);
+    const improves=(prioritizeCenter&&centerGain>=minimumGain&&centerWeight*centerGain>state.cost)
+      ||seatGain>.08||tableGain>.18||chairGain>.15||accessGain>.10||restored>0;
     if((hasConflicts||improves)&&score<bestScore){candidate=state;bestScore=score;}
   }
   if(!candidate)return hasConflicts?unresolved():keep();

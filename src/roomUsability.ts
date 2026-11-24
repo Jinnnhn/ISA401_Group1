@@ -1,4 +1,4 @@
-import {corners,doorFrame,itemInsideRoom,polygonOverlap,WALL_INSET,type House,type Item,type Room} from './model';
+import {corners,doorFrame,itemInsideRoom,polygonOverlap,WALL_INSET,type Door,type House,type Item,type Room} from './model';
 
 export const passageWidth=.60;
 export const sofaClearance=.42;
@@ -9,6 +9,7 @@ export const isSeat=(item:Item)=>item.kind==='sofa'||item.kind==='chair';
 
 type Box=Pick<Item,'x'|'z'|'w'|'d'|'rotation'>;
 type Footprint=ReturnType<typeof corners>;
+type Passage={door:Door; reachable:boolean; path?:[number,number][]};
 
 function facing(seat:Item){
   const angle=seat.rotation*Math.PI/180;
@@ -31,6 +32,10 @@ function frontClear(seat:Item,depth:number,room:Room,others:Footprint[]){
 
 export function frontClearance(seat:Item,room:Room,items:Item[]){
   const others=items.filter(item=>item.id!==seat.id).map(corners);
+  return clearanceDepth(seat,room,others);
+}
+
+function clearanceDepth(seat:Item,room:Room,others:Footprint[]){
   if(frontClear(seat,.8,room,others))return .8;
   let low=0,high=.8;
   while(high-low>.005){
@@ -39,6 +44,26 @@ export function frontClearance(seat:Item,room:Room,items:Item[]){
     else high=middle;
   }
   return low;
+}
+
+export const accessLabel={bed:'床侧进出',cabinet:'柜前取物'} as const;
+type Access={item:Item;kind:keyof typeof accessLabel;depth:number;target:number};
+
+function furnitureAccess(room:Room,items:Item[]):Access[]{
+  return items.flatMap((item):Access[]=>{
+    if(item.kind!=='bed'&&item.kind!=='cabinet')return [];
+    const others=items.filter(other=>other.id!==item.id).map(corners);
+    if(item.kind==='cabinet')return [{item,kind:item.kind,depth:clearanceDepth(item,room,others),target:.55}];
+    const sides=[90,270].map(turn=>({...item,w:item.d,d:item.w,rotation:item.rotation+turn}));
+    return [{item,kind:item.kind,depth:Math.max(...sides.map(side=>clearanceDepth(side,room,others))),target:.50}];
+  });
+}
+
+export function furnitureAccessLoss(before:Access[],after:Access[]){
+  return after.find(result=>{
+    const original=before.find(value=>value.item.id===result.item.id);
+    return !!original&&result.depth+epsilon<Math.min(original.depth,original.target);
+  });
 }
 
 // In both seat models the front points along local positive Z.
@@ -51,10 +76,10 @@ export function tableRelationship(seat:Item,table:Item) {
   const gap=forward-seat.d/2-halfDepth;
   const sideLimit=Math.max(.22,seat.w*.42);
   const penalty=Math.max(0,sofaClearance-gap,gap-.72)+Math.max(0,side-sideLimit);
-  return {gap,side,penalty};
+  return {gap,side,penalty,forward};
 }
 
-function roomPassages(house:House,room:Room){
+function roomPassages(house:House,room:Room,includePaths=false):Passage[]{
   const doors=house.doors.filter(door=>door.roomId===room.id);
   if(!doors.length)return [];
   const radius=passageWidth/2;
@@ -88,9 +113,11 @@ function roomPassages(house:House,room:Room){
   }
   // Flood from all free cells in the central area, then check each door's entry strip.
   const queue=new Int32Array(free.length),visited=new Uint8Array(free.length);
+  const towardCenter=includePaths?new Int32Array(free.length).fill(-1):undefined;
   let end=0;
-  const visit=(index:number)=>{
+  const visit=(index:number,from=-1)=>{
     if(!free[index]||visited[index])return;
+    if(towardCenter)towardCenter[index]=from;
     visited[index]=1;queue[end++]=index;
   };
   for(let iz=0;iz<nz;iz++)for(let ix=0;ix<nx;ix++){
@@ -98,22 +125,70 @@ function roomPassages(house:House,room:Room){
   }
   for(let start=0;start<end;start++){
     const index=queue[start],ix=index%nx,iz=Math.floor(index/nx);
-    if(ix>0)visit(index-1);
-    if(ix<nx-1)visit(index+1);
-    if(iz>0)visit(index-nx);
-    if(iz<nz-1)visit(index+nx);
+    if(ix>0)visit(index-1,index);
+    if(ix<nx-1)visit(index+1,index);
+    if(iz>0)visit(index-nx,index);
+    if(iz<nz-1)visit(index+nx,index);
   }
   return doors.map(door=>{
     const frame=doorFrame(house,door);
     const alongX=!!frame.ux,steps=alongX?nx:nz;
     const edge=door.wall==='north'||door.wall==='west'?0:alongX?nz-1:nx-1;
     const allowance=door.width/2-radius;
+    let closest=-1,closestOffset=Infinity;
     for(let i=0;i<steps;i++){
       const offset=alongX?left+i*dx-frame.x:top+i*dz-frame.z;
-      if(Math.abs(offset)<=allowance&&visited[alongX?edge*nx+i:i*nx+edge])return {door,reachable:true};
+      const index=alongX?edge*nx+i:i*nx+edge;
+      if(Math.abs(offset)<=allowance&&visited[index]){
+        if(!towardCenter)return {door,reachable:true};
+        if(Math.abs(offset)<closestOffset){closest=index;closestOffset=Math.abs(offset);}
+      }
+    }
+    if(towardCenter&&closest>=0){
+      const path:[number,number][]=[];
+      for(let index=closest;index>=0;index=towardCenter[index]){
+        path.push([left+(index%nx)*dx,top+Math.floor(index/nx)*dz]);
+      }
+      return {door,reachable:true,path};
     }
     return {door,reachable:false};
   });
+}
+
+export function passageLoss(before:Passage[],after:Passage[]){
+  return before.find(({door,reachable})=>reachable&&!after.some(result=>result.door.id===door.id&&result.reachable));
+}
+
+export function checkFurnitureAddition(house:House,room:Room){
+  const existing=house.items.filter(item=>item.roomId===room.id);
+  const occupied=existing.map(corners);
+  const seatClearances=existing.filter(isSeat).flatMap(seat=>{
+    const depth=Math.min(frontClearance(seat,room,existing),frontTarget(seat))-epsilon;
+    return depth>0?[corners(frontSpace(seat,depth))]:[];
+  });
+  const passages=roomPassages(house,room);
+  const access=furnitureAccess(room,existing);
+  return (item:Item):string|undefined=>{
+    const footprint=corners(item);
+    if(seatClearances.some(zone=>polygonOverlap(zone,footprint)))return '会挤窄现有座椅的入座空间';
+    if(isSeat(item)&&!frontClear(item,frontTarget(item)-epsilon,room,occupied))return '新座椅前方没有足够的入座空间';
+    const addedItems=[...existing,item];
+    const accessAfter=furnitureAccess(room,addedItems);
+    const lost=furnitureAccessLoss(access,accessAfter);
+    if(lost)return `会妨碍${lost.item.name}的${accessLabel[lost.kind]}`;
+    const own=accessAfter.find(result=>result.item.id===item.id);
+    if(own&&own.depth+epsilon<own.target)return `没有足够的${accessLabel[own.kind]}空间`;
+    if(passages.some(passage=>passage.reachable)
+      &&passageLoss(passages,roomPassages({...house,items:addedItems},room)))return '会堵住原有进门通路';
+  };
+}
+
+export function accessPreview(house:House,room:Room){
+  return roomPassages(house,room,true);
+}
+
+export function seatingArea(item:Item){
+  return isSeat(item)?corners(frontSpace(item,frontTarget(item))):undefined;
 }
 
 export function assessRoomUse(house:House,room:Room) {
@@ -122,7 +197,7 @@ export function assessRoomUse(house:House,room:Room) {
   const sofa=seats.filter(({item})=>item.kind==='sofa').sort((a,b)=>b.item.w-a.item.w)[0]?.item;
   const table=sofa&&items.filter(item=>item.kind==='table')
     .map(item=>({item,...tableRelationship(sofa,item)})).sort((a,b)=>a.penalty-b.penalty)[0];
-  return {seats,sofa,table,passages:roomPassages(house,room)};
+  return {seats,sofa,table,access:furnitureAccess(room,items),passages:roomPassages(house,room)};
 }
 
 export function seatingLoss(before:ReturnType<typeof assessRoomUse>,after:ReturnType<typeof assessRoomUse>){

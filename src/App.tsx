@@ -1,15 +1,17 @@
 import {useEffect,useRef,useState,type ReactNode,type SetStateAction} from 'react';
 import {Armchair,ArrowDownToLine,ArrowLeftRight,Box,Check,ChevronDown,ChevronLeft,ChevronRight,Copy,DoorOpen,Expand,Eye,Focus,Grid2X2,Hand,HelpCircle,Home,Layers,LockKeyhole,Map,Maximize2,Minus,MousePointer2,Move,Plus,Redo2,RotateCcw,RotateCw,Ruler,Save,Scan,Settings2,Sofa,Sparkles,Sprout,Trash2,Undo2,Upload,X,ZoomIn} from 'lucide-react';
-import Scene from './Scene';
+import Scene,{type AdviceMarker,type AccessOverlay,type SceneTools} from './Scene';
 import {CATALOG,alternateHouse,constrainHouse,copy,initialHouse,makeItem,roomOf,validHouse,warnings,type House,type Kind,type Tool,type Item} from './model';
 import {PLAN_OPTIONS,defaultWorkspace,restoreWorkspace,type PlanId,type Workspace} from './projects';
-import AssistantPanel from './AssistantPanel';
+import AssistantPanel,{type AssistantTools} from './AssistantPanel';
 import SelectionActions from './SelectionActions';
 import SurfacePanel from './SurfacePanel';
 import {roomHeight,doorHeight,windowHeight,windowSill} from './architecture';
 import {addedConflicts,placeCopies} from './placement';
-import {applyLayoutChanges,applyLayoutMove,type AdviceDraft,type Move as LayoutMove} from './layoutAdvice';
+import {applyLayoutChanges,applyLayoutMove,itemLabel,type AdviceDraft,type Move as LayoutMove,type MoveExplanation} from './layoutAdvice';
 import {applyRoomEdit,roomEditTitle} from './roomEdits';
+import {accessPreview,frontTarget,passageWidth,seatingArea} from './roomUsability';
+import {reviewRoom,type ReviewIssue} from './roomReview';
 
 const STORAGE='spacemate-react-workspace-v4';
 type History={house:House;past:House[];future:House[]};
@@ -28,7 +30,10 @@ export default function App(){
  function setHistory(action:SetStateAction<History>){setHistoryByPlan(previous=>({...previous,[activePlanId]:typeof action==='function'?action(previous[activePlanId]):action}));}
  const [roomId,setRoomId]=useState(house.rooms[0].id),[selected,setSelected]=useState<string[]>([]),[mode,setMode]=useState<'2d'|'3d'>('3d'),[realistic,setRealistic]=useState(false),[tool,setTool]=useState<Tool>('select'),[grid,setGrid]=useState(true),[showDimensions,setDimensions]=useState(false),[resetKey,setResetKey]=useState(0),[mapOpen,setMapOpen]=useState(false),[helpOpen,setHelpOpen]=useState(false),[roomsOpen,setRoomsOpen]=useState(false),[tab,setTab]=useState<'objects'|'catalog'|'materials'>('objects'),[replace,setReplace]=useState(false),[view,setView]=useState<[number,number][]>([]);
  const [previewHouse,setPreviewHouse]=useState<House|null>(null),[busy,setBusy]=useState(false);
- const [advicePreview,setAdvicePreview]=useState<{base:House;roomId:string;draft:AdviceDraft;changes:LayoutMove[];house:House}|null>(null);
+ const [advicePreview,setAdvicePreview]=useState<{base:House;roomId:string;draft:AdviceDraft;changes:LayoutMove[];house:House;markers:AdviceMarker[];access?:AccessOverlay}|null>(null);
+ const assistantRef=useRef<AssistantTools>(null),sceneRef=useRef<SceneTools>(null);
+ const [includeRoomViews,setIncludeRoomViews]=useState(true);
+ const [saveReview,setSaveReview]=useState<{house:House;roomId:string;issues:ReviewIssue[];highlightedId:string}|null>(null);
  const workspaceRef=useRef<HTMLElement>(null),previewModeBefore=useRef<'2d'|'3d'>('3d');
  const [insets,setInsets]=useState({left:84,right:20,top:82,bottom:112});
  const [propertiesHidden,setPropertiesHidden]=useState(true),[mapHidden,setMapHidden]=useState(()=>window.innerWidth<1200||window.innerHeight<820),[assistantHidden,setAssistantHidden]=useState(true);
@@ -39,6 +44,7 @@ export default function App(){
  const activeAdvice=advicePreview?.base===house && advicePreview.roomId===room.id && !realistic ? advicePreview : null;
  const mapDraft=activeAdvice?.house??previewHouse;
  const assistantUnavailable=realistic||busy||mapOpen||roomsOpen||helpOpen;
+ const visibleReview=saveReview?.house===house&&saveReview.roomId===room.id&&!realistic?saveReview:null;
  useEffect(()=>{setAdvicePreview(null);},[house,room.id,activePlanId,realistic]);
  function notify(s:string){setMessage(s);setToast(s);if(saveTimer.current)clearTimeout(saveTimer.current);saveTimer.current=setTimeout(()=>setToast(''),3200);}
  useEffect(()=>()=>{if(saveTimer.current)clearTimeout(saveTimer.current);},[]);
@@ -56,13 +62,33 @@ export default function App(){
   if(draft.kind==='roomEdit')return applyRoomEdit(house,room.id,draft.edit);
   return applyLayoutChanges(house,room.id,draft.changes,draft.preserveIds);
  }
- function previewAdvice(draft:AdviceDraft|null,base:House){
+ function previewAdvice(draft:AdviceDraft|null,base:House,explanation?:MoveExplanation){
   if(!draft){setAdvicePreview(null);return true;}
   if(base!==house||assistantUnavailable)return false;
   const result=validateAdvice(draft);
   if('error' in result){notify(result.error);return false;}
   const changes='kind' in draft?(draft.kind==='roomProposal'?draft.changes:[]):[draft];
-  setAdvicePreview({base,roomId:room.id,draft,changes,house:result.house});
+  let access:AccessOverlay|undefined;
+  const nextItems=result.house.items.filter(item=>item.roomId===room.id);
+  const markers:AdviceMarker[]=changes.flatMap((move,index)=>{
+   const detail='kind' in draft&&draft.kind==='roomProposal'?draft.explanations[index]:explanation;
+   return detail?[{itemId:move.itemId,name:itemLabel(nextItems,move.itemId),reason:detail.reason,impact:detail.impact}]:[];
+  });
+  if('kind' in draft&&draft.kind==='roomEdit'&&draft.edit.action==='addFurniture'){
+   const addedId=draft.edit.itemId;
+   const added=nextItems.find(item=>item.id===addedId)!;
+   const passages=accessPreview(result.house,room);
+   const routes=passages.flatMap(({path})=>path?[path]:[]);
+   const seating=seatingArea(added);
+   access={routes,seating};
+   const impact=passages.length===0?'当前房间没有标注房门。':passages.every(({reachable})=>reachable)
+    ?`按户型估算，门全开时检出从门口到房间中央的 ${Math.round(passageWidth*100)} 厘米通路。`
+    :`按户型估算，部分房门至中央未检出 ${Math.round(passageWidth*100)} 厘米通路。`;
+   markers.push({itemId:added.id,name:itemLabel(nextItems,added.id),
+    reason:`按家具库占地找到该位置，通过边界、重叠和开门检查。${seating?`图中标出座椅前方的 ${Math.round(frontTarget(added)*100)} 厘米入座检查区域。`:''}`,
+    impact:`现有家具保持原位。${impact}`});
+  }
+  setAdvicePreview({base,roomId:room.id,draft,changes,house:result.house,markers,access});
   setMessage('kind' in draft&&draft.kind==='roomEdit'
    ?`正在预览：${roomEditTitle(draft.edit)}。点击应用后才会修改布局。`
    :'正在预览建议。虚线标出家具原位置，应用后会记录到撤销历史。');
@@ -95,7 +121,23 @@ export default function App(){
  function switchRoom(id:string){setPreviewHouse(null);setRoomId(id);setSelected([]);setTool('select');setReplace(false);setMessage(`正在编辑${house.rooms.find(r=>r.id===id)?.name??'房间'}，其他房间的布局已保留。`);}
  function switchPlan(id:PlanId){if(id===activePlanId)return;setPreviewHouse(null);setActivePlanId(id);setRoomId(historyByPlan[id].house.rooms[0].id);setSelected([]);setTool('select');setReplace(false);setTab('objects');setView([]);setMapOpen(false);notify(`已切换到${historyByPlan[id].house.name}；两个房型的布局和撤销记录分别保留。`);}
  useEffect(()=>{if(!house.rooms.some(r=>r.id===roomId))setRoomId(house.rooms[0].id);setSelected(s=>s.filter(id=>[...house.items,...house.doors,...house.windows].some(f=>f.id===id)));},[house]);
- function save(){try{const projects={forest:historyByPlan.forest.house,sky:historyByPlan.sky.house};const workspace:Workspace={version:2,activePlanId,projects};localStorage.setItem(STORAGE,JSON.stringify(workspace));setSaved({forest:JSON.stringify(projects.forest),sky:JSON.stringify(projects.sky)});setSavedTime(new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}));notify('两个房型的全屋布局已保存，刷新后可恢复。');}catch{notify('本地保存失败，请分别切换房型并导出 JSON 备份。');}}
+ function save(){
+  try{
+   const projects={forest:historyByPlan.forest.house,sky:historyByPlan.sky.house};
+   const workspace:Workspace={version:2,activePlanId,projects};
+   localStorage.setItem(STORAGE,JSON.stringify(workspace));
+   setSaved({forest:JSON.stringify(projects.forest),sky:JSON.stringify(projects.sky)});
+   setSavedTime(new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}));
+  }catch{notify('本地保存失败，请分别切换房型并导出 JSON 备份。');return;}
+  const {issues}=reviewRoom(house,room);
+  setSaveReview(issues.length?{house,roomId:room.id,issues,highlightedId:issues[0].id}:null);
+  notify(issues.length?`已保存布局，${room.name}有 ${issues.length} 项需要关注。`:'两个房型的全屋布局已保存，刷新后可恢复。');
+ }
+ function checkLayout(){
+  if(assistantUnavailable)return;
+  assistantRef.current?.checkLayout(includeRoomViews?()=>sceneRef.current?.captureRoomViews(house,room.id):undefined);
+  setSaveReview(null);
+ }
  function remove(){if(!chosen.length||anyLocked)return;update(h=>{h.items=h.items.filter(f=>!selected.includes(f.id));});setSelected([]);notify('已删除选中的家具，可通过撤销恢复。');}
  function rotate(deg:number){if(!chosen.length||anyLocked)return;if(update(h=>{h.items.forEach(f=>{if(selected.includes(f.id))f.rotation=(f.rotation+deg+360)%360;});}))notify('已调整朝向并检查墙内边界；多选时各家具围绕自身中心旋转。');}
  function toggleLock(){if(!chosen.length)return;update(h=>{h.items.forEach(f=>{if(selected.includes(f.id))f.locked=!allLocked;});});notify(allLocked?'已解锁家具。':'已锁定家具，不能移动、旋转、替换或删除。');}
@@ -124,12 +166,19 @@ export default function App(){
   <header className="topbar">
    <div className="brand"><div className="brand-mark"><Layers size={23}/></div><span>SpaceMate<span className="brand-dot">.</span></span></div>
    <div className="header-divider"/><select className="plan-picker" aria-label="切换房型" value={activePlanId} onChange={e=>switchPlan(e.target.value as PlanId)}>{PLAN_OPTIONS.map(p=><option key={p.id} value={p.id}>{historyByPlan[p.id].house.name}</option>)}</select><span className="prototype-badge">实尺度布局</span>
-   <div className="history-controls floating"><Button className="icon-button" icon={<Undo2 size={18}/>} title="撤销 (Ctrl+Z)" disabled={realistic||busy||!history.past.length} onClick={undo}/><Button className="icon-button" icon={<Redo2 size={18}/>} title="重做 (Ctrl+Shift+Z)" disabled={realistic||busy||!history.future.length} onClick={redo}/><span className="history-divider"/><span>{grid?'10 cm 吸附':'自由移动'}</span></div><div className="header-right"><span className={'save-state '+(dirty?'unsaved':'')}><i/>{dirty?'有未保存的修改':savedTime==='尚未保存'?'尚未保存':`${savedTime} 已保存`}</span><Button className="icon-button help-button" icon={<HelpCircle size={19}/>} title="操作帮助" onClick={()=>setHelpOpen(true)}/><Button className="save-button" disabled={busy} icon={<Save size={16}/>} onClick={save}>保存布局</Button></div>
+   <div className="history-controls floating"><Button className="icon-button" icon={<Undo2 size={18}/>} title="撤销 (Ctrl+Z)" disabled={realistic||busy||!history.past.length} onClick={undo}/><Button className="icon-button" icon={<Redo2 size={18}/>} title="重做 (Ctrl+Shift+Z)" disabled={realistic||busy||!history.future.length} onClick={redo}/><span className="history-divider"/><span>{grid?'10 cm 吸附':'自由移动'}</span></div><div className="header-right"><span className={'save-state '+(dirty?'unsaved':'')}><i/>{dirty?'有未保存的修改':savedTime==='尚未保存'?'尚未保存':`${savedTime} 已保存`}</span><Button className="icon-button help-button" icon={<HelpCircle size={19}/>} title="操作帮助" onClick={()=>setHelpOpen(true)}/>
+    <div className="layout-review-control">
+     <Button className="layout-review-button" disabled={assistantUnavailable} icon={<Sparkles size={15}/>} onClick={checkLayout}>AI 检查布局</Button>
+     <label><input type="checkbox" checked={includeRoomViews} onChange={event=>setIncludeRoomViews(event.target.checked)}/>附上房间视图</label>
+    </div>
+    <Button className="save-button" disabled={busy} icon={<Save size={16}/>} onClick={save}>保存布局</Button></div>
   </header>
   <nav className="room-bar"><span className="room-bar-label"><Home size={15}/> 我的户型</span><div className="room-tabs">{house.rooms.map(r=><button key={r.id} className={r.id===room.id?'active':''} onClick={()=>switchRoom(r.id)}>{r.name}<small>{(r.w*r.d).toFixed(1)} m²</small></button>)}</div><Button className="manage-button" icon={<Settings2 size={15}/>} onClick={()=>setRoomsOpen(true)}>房型管理</Button></nav>
   <section ref={workspaceRef} className={'workspace '+(!assistantHidden?'assistant-open ':'assistant-compact ')+(propertiesHidden?'properties-hidden ':'')+(mapHidden?'map-hidden ':'')+(realistic?'preview-mode':'')} aria-label="布局编辑器">
-   <Scene key={'main-'+activePlanId} {...sceneProps} draft={activeAdvice?.house??null} advicePreview={activeAdvice?.changes??null} onView={setView} onPreview={setPreviewHouse} onBusy={setBusy}/>
-   {!realistic&&single&&!activeAdvice&&<SelectionActions itemName={single.name} disabled={single.locked||assistantUnavailable} onRotate={()=>rotate(90)} onReplace={openReplacement} onDelete={remove}/>}
+   <Scene key={'main-'+activePlanId} ref={sceneRef} {...sceneProps} draft={activeAdvice?.house??null} advicePreview={activeAdvice?.changes??null} reviewIssueId={activeAdvice?undefined:visibleReview?.highlightedId}
+    adviceMarkers={activeAdvice?.markers} accessOverlay={activeAdvice?.access} onView={setView} onPreview={setPreviewHouse} onBusy={setBusy}/>
+   {!realistic&&single&&!activeAdvice&&<SelectionActions itemName={itemLabel(items,single.id)} disabled={single.locked||assistantUnavailable} checkDisabled={assistantUnavailable}
+    onCheck={()=>assistantRef.current?.checkPosition(single.id)} onRotate={()=>rotate(90)} onReplace={openReplacement} onDelete={remove}/>}
    <div className="scene-title"><h1>{room.name}</h1><p>{room.w.toFixed(1)} × {room.d.toFixed(1)} m <span>·</span> 净高 {roomHeight(room).toFixed(2)} m <span>·</span> {items.length} 件家具 <span>·</span> {realistic?'室内观察':'自由编辑'}</p><small className="plan-provenance">尺寸示例，非实测住宅 · 可在房型管理中按实测调整</small></div>
    <div className="view-controls floating"><button className={mode==='2d'?'active':''} disabled={busy} onClick={()=>setViewMode('2d')}><Grid2X2 size={15}/>2D 平面</button><button className={mode==='3d'&&!realistic?'active':''} disabled={busy} onClick={()=>setViewMode('3d')}><Box size={15}/>3D 空间</button><button className={realistic?'active':''} disabled={busy} onClick={togglePreview}><Eye size={15}/>室内预览</button><span/><Button className="icon-button" icon={<Focus size={17}/>} title="适配当前房间" onClick={()=>setResetKey(k=>k+1)}/></div>
    <div className="tool-rail floating" role="toolbar" aria-label="编辑工具">
@@ -151,12 +200,17 @@ export default function App(){
     </div><div className="panel-footer"><span className="status-dot"/> 所有尺寸单位为米 <span>m</span></div>
    </aside>:<button className="panel-reopen properties-reopen floating" aria-label="展开物件面板" aria-expanded="false" onClick={()=>setPropertiesHidden(false)}><ChevronLeft size={17}/>物件 / 材质</button>}
    {!mapHidden?<div className="minimap floating"><div className="minimap-heading"><span><Map size={14}/> 全屋预览</span><div><Button className="icon-button" icon={<Expand size={14}/>} title="放大全屋地图" onClick={()=>setMapOpen(true)}/><button className="icon-button panel-collapse" title="收起全屋预览" aria-label="收起全屋预览" aria-expanded="true" onClick={()=>setMapHidden(true)}><ChevronRight size={16}/></button></div></div><div className="minimap-viewport"><Scene key={activePlanId} {...sceneProps} mini draft={mapDraft} realistic={false} mode="3d" view={view} onRoom={switchRoom}/><button className="minimap-expand" aria-label="点击放大全屋地图" onClick={()=>setMapOpen(true)}/></div><div className="minimap-caption"><i/> 当前视野 <button onClick={()=>setMapOpen(true)}>查看全屋 <ChevronRight size={12}/></button></div></div>:<button className="panel-reopen map-reopen floating" aria-label="展开全屋预览" aria-expanded="false" onClick={()=>setMapHidden(false)}><Map size={15}/>全屋预览<ChevronRight size={16}/></button>}
-   <AssistantPanel key={`${activePlanId}:${room.id}`} house={house} roomId={room.id} selected={selected} collapsed={assistantHidden}
+   <AssistantPanel key={`${activePlanId}:${room.id}`} ref={assistantRef} house={house} roomId={room.id} selected={selected} collapsed={assistantHidden}
     unavailable={assistantUnavailable} previewDraft={activeAdvice?.draft??null}
     onToggle={()=>{if(!assistantHidden)setAdvicePreview(null);setAssistantHidden(hidden=>!hidden);}}
     onFocus={id=>{if(!assistantUnavailable){setSelected([id]);setTool('select');}}} onPreview={previewAdvice} onApply={applyAdvice}/>
    <div className="canvas-hint"><span><MousePointer2 size={12}/> 左键拖动框选 · 单击家具后再拖动移动</span><span>右键拖动旋转视角</span><span>中键平移</span><span>滚轮缩放</span></div>
-   {roomWarnings.length>0&&<button className="room-warning" onClick={()=>{const id=roomWarnings[0];setSelected([id]);setTab('objects');}}><span className="warning-dot"/>{roomWarnings.length} 处摆放提示<ChevronRight size={13}/></button>}
+   {visibleReview?<aside className="layout-review-notice floating" aria-label="保存后的布局检查">
+    <div><strong>{room.name} · {visibleReview.issues.length} 项需要关注</strong><button type="button" aria-label="关闭布局检查提示" onClick={()=>setSaveReview(null)}><X size={15}/></button></div>
+    <ul>{visibleReview.issues.map(issue=><li key={issue.message}><button type="button" aria-pressed={visibleReview.highlightedId===issue.id}
+      onClick={()=>setSaveReview({...visibleReview,highlightedId:issue.id})}>{issue.message}</button></li>)}</ul>
+    <Button className="layout-review-button" disabled={assistantUnavailable} onClick={checkLayout}>查看 AI 建议</Button>
+   </aside>:roomWarnings.length>0&&<button className="room-warning" onClick={()=>{const id=roomWarnings[0];setSelected([id]);setTab('objects');}}><span className="warning-dot"/>{roomWarnings.length} 处摆放提示<ChevronRight size={13}/></button>}
    {toast&&<div className="toast" role="status"><Check size={16}/>{toast}</div>}
   </section>
   <footer className="statusbar"><span className="status-dot"/><p aria-live="polite">{message}</p><span className="status-right">{tool==='measure'?'测量模式':tool==='box'?'框选模式':'选择模式'}</span></footer>

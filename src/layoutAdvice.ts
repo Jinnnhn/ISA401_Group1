@@ -1,5 +1,6 @@
-import {corners, doorFrame, itemBlocksDoor, itemInsideRoom, polygonOverlap, validHouse, WALL_INSET, type Door, type House, type Item, type Kind} from './model';
+import {corners, doorFrame, itemBlocksDoor, itemInsideRoom, polygonOverlap, validHouse, warnings, WALL_INSET, type Door, type House, type Item, type Kind} from './model';
 import type {RoomEditAdvice} from './roomEdits';
+import {assessRoomUse,passageWidth} from './roomUsability';
 
 export const layoutPreferences = {balanced:'按本次要求', passage:'通行优先', hosting:'会客优先'} as const;
 export type LayoutPreference = keyof typeof layoutPreferences;
@@ -10,7 +11,7 @@ export type RoomObjective = 'balanced'|'center'|'door'|'hosting';
 export type PreviousRoomSuggestion = {changes:Move[]; objective:RoomObjective; preserveIds:string[]};
 export type LayoutContext = {room:House['rooms'][number]; items:Item[]; doors:House['doors']; windows:House['windows']; selectedIds:string[]; preference:LayoutPreference; custom:string; confirmedId?:string; previousSuggestion?:PreviousSuggestion; previousRoomSuggestion?:PreviousRoomSuggestion};
 export type MoveExplanation = {movement:string; reason:string; impact:string; details:string[]};
-export type RoomProposal = {kind:'roomProposal'; reply:string; objective:RoomObjective; objectiveLabel:string; preserveIds:string[]; changes:Move[]; explanations:MoveExplanation[]};
+export type RoomProposal = {kind:'roomProposal'; reply:string; reviewNote?:string; objective:RoomObjective; objectiveLabel:string; preserveIds:string[]; changes:Move[]; explanations:MoveExplanation[]};
 export type AdviceDraft = Move|RoomProposal|RoomEditAdvice;
 export type Advice =
   | {kind:'text'; reply:string; keepSuggestion?:boolean}
@@ -308,6 +309,25 @@ export function footprintGap(first:Item,second:Item) {
   const firstCorners=corners(first),secondCorners=corners(second);
   if(polygonOverlap(firstCorners,secondCorners))return 0;
   return Math.max(0,Math.min(...firstCorners.map(([x,z])=>distanceToItem(x,z,second)),...secondCorners.map(([x,z])=>distanceToItem(x,z,first))));
+}
+
+export function inspectFurniturePlacement(house:House,roomId:string,itemId:string){
+  const room=house.rooms.find(room=>room.id===roomId);
+  const items=house.items.filter(item=>item.roomId===roomId);
+  const item=items.find(item=>item.id===itemId);
+  if(!room||!item)return;
+  const name=itemLabel(items,item.id),issues=warnings(house)[item.id];
+  const use=assessRoomUse(house,room);
+  const seat=use.seats.find(value=>value.item.id===item.id);
+  const neighbor=items.filter(other=>other!==item)
+    .map(other=>({id:other.id,distance:footprintGap(item,other)})).sort((a,b)=>a.distance-b.distance)[0];
+  const checks=[
+    issues?.length?`当前位置：${issues.join('；')}。`:'当前位置通过墙内边界、家具重叠和门扇开启范围检查。',
+    seat?`座椅前方可用深度${seat.depth>=.8?'至少':'约'} ${cmLabel(centimeters(seat.depth))}。`:'',
+    neighbor?`与${itemLabel(items,neighbor.id)}的最近边缘间距约 ${cmLabel(centimeters(neighbor.distance))}。`:'',
+    ...use.passages.map(({door,reachable})=>`${doorLabel(door,house.doors.filter(value=>value.roomId===roomId))}到中央${reachable?'检出':'未检出'}约 ${cmLabel(centimeters(passageWidth))}宽的通路。`),
+  ];
+  return {name,reply:`${name} · 按当前户型估算\n${checks.filter(Boolean).join('\n')}`};
 }
 
 const centimeters=(meters:number)=>Math.round(meters*100+1e-7);

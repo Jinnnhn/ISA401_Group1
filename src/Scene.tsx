@@ -1,4 +1,5 @@
-import {useEffect,useRef,useState} from 'react';
+import {useEffect,useImperativeHandle,useRef,useState,type Ref} from 'react';
+import {ChevronDown} from 'lucide-react';
 import * as T from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js';
@@ -11,9 +12,15 @@ import {roomHeight,doorHeight,windowHeight,windowSill,wallSections,type Wall} fr
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import {previewMove} from './placement';
 import {itemLabel,type Move} from './layoutAdvice';
+import {passageWidth} from './roomUsability';
+import {captureRoomPlan,encodeRoomView,viewHeight,viewWidth} from './roomViews';
+import type {RoomViews} from './roomReview';
 
-type Props={house:House;draft?:House|null;advicePreview?:readonly Move[]|null;insets?:{left:number;right:number;top:number;bottom:number};blocked?:boolean;onBusy?:(busy:boolean)=>void;roomId:string;mode:'2d'|'3d';selected:string[];tool:Tool;grid:boolean;measure:boolean;resetKey:number;realistic?:boolean;mini?:boolean;view?:[number,number][];onSelect:(ids:string[])=>void;onCommit:(h:House)=>boolean;onMessage:(s:string)=>void;onPreview?:(h:House|null)=>void;onView?:(p:[number,number][])=>void;onRoom?:(id:string)=>void};
-type Engine={rebuild:()=>void;reset:()=>void;outlineView:()=>void;preview:(h:House)=>void;reframe:()=>void};
+export type AdviceMarker={itemId:string;name:string;reason:string;impact:string};
+export type AccessOverlay={routes:[number,number][][];seating?:[number,number][]};
+export type SceneTools={captureRoomViews:(house:House,roomId:string)=>RoomViews|undefined};
+type Props={ref?:Ref<SceneTools>;house:House;draft?:House|null;advicePreview?:readonly Move[]|null;adviceMarkers?:readonly AdviceMarker[];accessOverlay?:AccessOverlay;reviewIssueId?:string;insets?:{left:number;right:number;top:number;bottom:number};blocked?:boolean;onBusy?:(busy:boolean)=>void;roomId:string;mode:'2d'|'3d';selected:string[];tool:Tool;grid:boolean;measure:boolean;resetKey:number;realistic?:boolean;mini?:boolean;view?:[number,number][];onSelect:(ids:string[])=>void;onCommit:(h:House)=>boolean;onMessage:(s:string)=>void;onPreview?:(h:House|null)=>void;onView?:(p:[number,number][])=>void;onRoom?:(id:string)=>void};
+type Engine={rebuild:()=>void;reset:()=>void;outlineView:()=>void;preview:(h:House)=>void;reframe:()=>void}&SceneTools;
 function dispose(root:T.Object3D){const maps=new Set<T.Texture>();root.traverse(o=>{if(o instanceof T.Mesh||o instanceof T.Line||o instanceof T.Sprite){if('geometry'in o)o.geometry.dispose();for(const m of Array.isArray(o.material)?o.material:[o.material]){for(const value of Object.values(m))if(value instanceof T.Texture)maps.add(value);m.dispose();}}});maps.forEach(t=>t.dispose());}
 function box(parent:T.Object3D,w:number,h:number,d:number,color:string,x=0,y=0,z=0,round=.025){
  const mesh=new T.Mesh(round?new RoundedBoxGeometry(w,h,d,2,Math.min(round,w/4,h/4,d/4)):new T.BoxGeometry(w,h,d),new T.MeshStandardMaterial({color,roughness:.8}));mesh.position.set(x,y,z);mesh.castShadow=true;mesh.receiveShadow=true;parent.add(mesh);return mesh;
@@ -25,7 +32,11 @@ function label(parent:T.Object3D,text:string,x:number,y:number,z:number,color='#
 export default function Scene(props:Props){
  const host=useRef<HTMLDivElement>(null),latest=useRef(props),engine=useRef<Engine|null>(null);latest.current=props;
  const clickedItemId=useRef<string|undefined>(undefined);
+ const markerNodes=useRef(new Map<string,HTMLDivElement>());
+ const [openedMarker,setOpenedMarker]=useState<string|null>(null);
  const [error,setError]=useState(''),[modelStatus,setModelStatus]=useState('loading');
+ useImperativeHandle(props.ref,()=>({captureRoomViews:(house,id)=>engine.current?.captureRoomViews(house,id)}),[]);
+ useEffect(()=>{setOpenedMarker(null);},[props.adviceMarkers]);
  useEffect(()=>{
   const el=host.current!;let renderer:T.WebGLRenderer;
   try{renderer=new T.WebGLRenderer({antialias:true,alpha:true});}catch{setError('3D 未能启动，请使用开启硬件加速的 Chrome 或 Edge。');return;}
@@ -84,8 +95,8 @@ export default function Scene(props:Props){
    controls.object=camera;controls.target.copy(center);controls.minDistance=p.realistic ? .35 : 4;controls.maxPolarAngle=p.realistic ? Math.PI*.495 : Math.PI/2.25;controls.maxDistance=p.realistic?Math.max(r.w,r.d)*1.5:35;controls.enableRotate=!ortho;controls.update();frameView(!remembered);emitView(true);
   }
   function outlineView(){clear(viewRoot);const p=latest.current;if(!p.mini||!p.view?.length)return;const outline=line(viewRoot,[...p.view,p.view[0]].map(([x,z])=>new T.Vector3(x,.12,z)),'#557d5f',true);(outline.material as T.LineDashedMaterial).depthTest=false;outline.renderOrder=50;}
-  function rebuild(){
-   targets.clear();const p=latest.current;if(drag)return;clear(root);clear(annotation);objects.clear();outlines.clear();facades.length=0;
+  function rebuild(snapshot?:Props){
+   targets.clear();const p=snapshot??latest.current;if(drag)return;clear(root);clear(annotation);objects.clear();outlines.clear();facades.length=0;
    const renderHouse=!p.mini&&!p.realistic&&p.advicePreview&&p.draft?p.draft:p.house;
    const rooms=p.mini?renderHouse.rooms:renderHouse.rooms.filter(r=>r.id===p.roomId);const warn=warnings(renderHouse);
    const previewIds=new Set(p.advicePreview?.map(move=>move.itemId));
@@ -146,7 +157,28 @@ export default function Scene(props:Props){
     if(!flat)box(g,alongX?w.width+.16:.24,.04,alongX?.24:w.width+.16,'#d4d1c7',x,windowSill(w)-.025,z,.003);
     if(p.selected.includes(w.id)&&!p.mini&&!p.realistic)label(annotation,`窗户 · ${w.width} × ${windowHeight(w)} m`,x,y+h/2+.2,z,'#397c78');
    }
+   if(snapshot)return;
+   if(p.reviewIssueId&&!p.mini&&!p.realistic){
+    const item=p.house.items.find(value=>value.id===p.reviewIssueId);
+    const door=p.house.doors.find(value=>value.id===p.reviewIssueId);
+    const shape=item?corners(item):door?doorSweep(p.house,door):[];
+    if(shape.length){
+     const marks=[...shape,shape[0]].map(([x,z])=>new T.Vector3(x,.10,z));
+     const warning=line(annotation,marks,'#ba5321',true);
+     warning.material.depthTest=false;warning.renderOrder=30;
+    }
+   }
    if(activeRoom!==p.roomId||activeMode!==p.mode||activeRealistic!==!!p.realistic)reset();outlineView();if(p.mini&&p.draft)drawPreview(p.draft);
+   if(!p.mini&&!p.realistic&&p.accessOverlay){
+    const overlayLine=(points:[number,number][],color:string,dashed=false)=>{
+     if(points.length<2)return;
+     const trace=line(annotation,points.map(([x,z])=>new T.Vector3(x,.085,z)),color,dashed);
+     trace.material.depthTest=false;trace.renderOrder=26;
+    };
+    for(const route of p.accessOverlay.routes)overlayLine(route,'#234da0',true);
+    const seating=p.accessOverlay.seating;
+    if(seating)overlayLine([...seating,seating[0]],'#007766');
+   }
    if(!p.mini&&p.advicePreview&&!p.realistic)for(const move of p.advicePreview){
     const item=p.house.items.find(value=>value.id===move.itemId&&value.roomId===p.roomId);
     if(item){
@@ -163,7 +195,7 @@ export default function Scene(props:Props){
      const edge=outlines.get(item.id);if(edge){edge.visible=true;(edge.material as T.LineBasicMaterial).color.set('#167755');}
      const name=itemLabel(p.house.items.filter(value=>value.roomId===p.roomId),item.id);
      label(annotation,p.advicePreview.length===1?'原位置':`原位置 · ${name}`,item.x,.2,item.z,'#955223',.85).material.toneMapped=false;
-     label(annotation,`建议位置 · ${name}`,move.x,item.h+.4,move.z,'#116043').material.toneMapped=false;
+     if(!p.adviceMarkers?.some(marker=>marker.itemId===item.id))label(annotation,`建议位置 · ${name}`,move.x,item.h+.4,move.z,'#116043').material.toneMapped=false;
     }
    }
   }
@@ -230,7 +262,68 @@ export default function Scene(props:Props){
   };
   const context=(e:Event)=>e.preventDefault();renderer.domElement.addEventListener('pointerdown',down);renderer.domElement.addEventListener('pointermove',move);renderer.domElement.addEventListener('pointerup',up);renderer.domElement.addEventListener('pointercancel',cancel);renderer.domElement.addEventListener('lostpointercapture',cancel);renderer.domElement.addEventListener('contextmenu',context);window.addEventListener('keydown',key,true);window.addEventListener('blur',cancel);
   const resize=new ResizeObserver(()=>{width=Math.max(1,el.clientWidth);height=Math.max(1,el.clientHeight);renderer.setSize(width,height);if(camera instanceof T.PerspectiveCamera)camera.aspect=width/height;else{const span=(camera.top-camera.bottom)/2;camera.left=-span*width/height;camera.right=span*width/height;}camera.updateProjectionMatrix();frameView(true);emitView(true);});resize.observe(el);
-  engine.current={rebuild,reset,outlineView,preview:drawPreview,reframe:()=>frameView(false)};reset();rebuild();
+  function updateFacades(position:T.Vector3,flat:boolean){
+   for(const {group,r,wall} of facades){
+    group.visible=flat||!(wall==='south'&&position.z>r.z+r.d/2||wall==='north'&&position.z<r.z-r.d/2||wall==='east'&&position.x>r.x+r.w/2||wall==='west'&&position.x<r.x-r.w/2);
+   }
+  }
+  function captureRoomViews(house:House,roomId:string){
+   const p=latest.current;
+   if(p.house!==house||p.roomId!==roomId||p.mini||p.realistic||drag)return;
+   const room=roomOf(house,roomId);
+   const ratio=renderer.getPixelRatio();
+   const viewCamera=new T.OrthographicCamera(-1,1,1,-1,.1,150);
+   const heightOfRoom=roomHeight(room);
+   const center=new T.Vector3(room.x,heightOfRoom*.45,room.z);
+   viewCamera.position.copy(center).add(new T.Vector3(10,12,14));
+   viewCamera.lookAt(center);viewCamera.updateMatrixWorld(true);
+   let extentX=0,extentY=0;
+   for(const x of [room.x-room.w/2,room.x+room.w/2])for(const y of [0,heightOfRoom])for(const z of [room.z-room.d/2,room.z+room.d/2]){
+    const point=new T.Vector3(x,y,z).applyMatrix4(viewCamera.matrixWorldInverse);
+    extentX=Math.max(extentX,Math.abs(point.x));extentY=Math.max(extentY,Math.abs(point.y));
+   }
+   const aspect=viewWidth/viewHeight,span=Math.max(extentX/aspect,extentY)*1.12;
+   viewCamera.left=-span*aspect;viewCamera.right=span*aspect;
+   viewCamera.top=span;viewCamera.bottom=-span;viewCamera.updateProjectionMatrix();
+   const measureVisible=measureRoot.visible;
+   try{
+    const plan=captureRoomPlan(house,room,p.selected);
+    rebuild({...p,mode:'3d',selected:[],draft:null,advicePreview:null,accessOverlay:undefined,measure:false,grid:false});
+    updateFacades(viewCamera.position,false);measureRoot.visible=false;
+    renderer.setPixelRatio(1);renderer.setSize(viewWidth,viewHeight,false);
+    renderer.render(scene,viewCamera);
+    return {plan,perspective:encodeRoomView(renderer.domElement)};
+   }finally{
+    renderer.setPixelRatio(ratio);renderer.setSize(width,height,false);
+    measureRoot.visible=measureVisible;
+    rebuild();updateFacades(camera.position,p.mode==='2d');renderer.render(scene,camera);
+   }
+  }
+  engine.current={rebuild,reset,outlineView,preview:drawPreview,reframe:()=>frameView(false),captureRoomViews};reset();rebuild();
+  const projectedMarker=new T.Vector3();
+  function positionMarkers(p:Props){
+   if(!p.draft||!markerNodes.current.size)return;
+   const taken:{x:number;y:number}[]=[];
+   const {left=0,right=0,top=0,bottom=0}=p.insets??{};
+   const minY=Math.min(top+32,height-30),maxY=Math.max(minY,height-bottom-34);
+   for(const [id,element] of markerNodes.current){
+    const item=p.draft.items.find(value=>value.id===id);
+    if(!item){element.hidden=true;continue;}
+    const point=projectedMarker.set(item.x,p.mode==='2d'?.2:item.h+.33,item.z).project(camera);
+    const x=(point.x+1)*width/2,y=(1-point.y)*height/2;
+    element.hidden=point.z<-1||point.z>1||x<0||x>width||y<0||y>height;
+    if(element.hidden)continue;
+    const minX=Math.min(left+110,width/2),maxX=Math.max(minX,width-right-110);
+    const px=T.MathUtils.clamp(x,minX,maxX);
+    let py=T.MathUtils.clamp(y,minY,maxY);
+    while(taken.some(other=>Math.abs(other.x-px)<190&&Math.abs(other.y-py)<38)&&py+38<=maxY)py+=38;
+    taken.push({x:px,y:py});
+    element.style.left=`${px}px`;element.style.top=`${py}px`;
+    element.dataset.opensUp=String(py>(minY+maxY)/2);
+    const openSide=width-right-px>=360?'right':px-left>=360?'left':'';
+    element.dataset.opensSide=openSide;
+   }
+  }
   function tick(){frame=requestAnimationFrame(tick);controls.update();const dt=Math.min(clock.getDelta(),.05);for(const [id,target] of targets){objects.get(id)?.position.lerp(target,matchMedia('(prefers-reduced-motion: reduce)').matches?1:1-Math.exp(-20*dt));}
    const p=latest.current;
    if(p.realistic&&!p.mini){const r=roomOf(p.house,p.roomId),height=roomHeight(r);
@@ -241,11 +334,9 @@ export default function Scene(props:Props){
     controls.target.z=T.MathUtils.clamp(controls.target.z,r.z-r.d/2+.2,r.z+r.d/2-.2);
     controls.target.y=T.MathUtils.clamp(controls.target.y,.6,height-.25);camera.lookAt(controls.target);
    }
-   for(const {group,r,wall} of facades){
-    if(p.mini||p.mode==='2d'){group.visible=true;continue;}
-    group.visible=!(wall==='south'&&camera.position.z>r.z+r.d/2||wall==='north'&&camera.position.z<r.z-r.d/2||wall==='east'&&camera.position.x>r.x+r.w/2||wall==='west'&&camera.position.x<r.x-r.w/2);
-   }
+   updateFacades(camera.position,!!p.mini||p.mode==='2d');
    renderer.render(scene,camera);
+   positionMarkers(p);
   }tick();
   loadFurnitureAssets().then(()=>{if(!disposed){setModelStatus('ready');rebuild();}}).catch(()=>{if(!disposed){setModelStatus('partial');rebuild();}});
   return()=>{disposed=true;envTarget.dispose();engine.current=null;cancelAnimationFrame(frame);resize.disconnect();window.removeEventListener('keydown',key,true);window.removeEventListener('blur',cancel);rightOrbit?.dispose();controls.dispose();dispose(scene);renderer.dispose();renderer.domElement.remove();rect.remove();};
@@ -253,10 +344,34 @@ export default function Scene(props:Props){
  useEffect(()=>{
   if(props.selected.length!==1||props.selected[0]!==clickedItemId.current||!props.house.items.some(item=>item.id===clickedItemId.current&&item.roomId===props.roomId))clickedItemId.current=undefined;
   engine.current?.rebuild();
- },[props.house,props.roomId,props.mode,props.mini?null:props.selected,props.mini?false:props.grid,props.mini?false:props.measure,props.realistic,props.advicePreview,props.advicePreview?props.draft:null]);
+ },[props.house,props.roomId,props.mode,props.mini?null:props.selected,props.mini?false:props.grid,props.mini?false:props.measure,props.realistic,props.advicePreview,props.advicePreview?props.draft:null,props.adviceMarkers,props.accessOverlay,props.reviewIssueId]);
  useEffect(()=>{engine.current?.reset();},[props.resetKey]);
  useEffect(()=>{engine.current?.reframe();},[props.insets]);
  useEffect(()=>{engine.current?.outlineView();},[props.view]);
  useEffect(()=>{if(props.mini)engine.current?.preview(props.draft??props.house);},[props.draft,props.house,props.mini]);
- return <div className={'scene-host '+(props.mini?'mini-scene':'')} data-models={modelStatus} ref={host}>{!props.mini&&modelStatus!=='ready'&&<div className="model-loading">{modelStatus==='loading'?'正在载入真实家具模型…':'部分模型未能载入，暂用替代形状。'}</div>}{error&&<div className="canvas-error" role="alert">{error}</div>}</div>;
+ return <div className={'scene-host '+(props.mini?'mini-scene':'')} data-models={modelStatus} ref={host}>
+  {!props.mini&&modelStatus!=='ready'&&<div className="model-loading">{modelStatus==='loading'?'正在载入真实家具模型…':'部分模型未能载入，暂用替代形状。'}</div>}
+  {error&&<div className="canvas-error" role="alert">{error}</div>}
+  {!props.blocked&&!props.realistic&&props.adviceMarkers?.map(marker=>{
+   const expanded=openedMarker===marker.itemId;
+   const regionId=`advice-marker-${marker.itemId}`;
+   return <div key={marker.itemId} className="advice-marker" ref={node=>{
+    if(node)markerNodes.current.set(marker.itemId,node);else markerNodes.current.delete(marker.itemId);
+   }} hidden>
+    <button type="button" className="advice-marker-trigger" aria-expanded={expanded} aria-controls={expanded?regionId:undefined}
+     onClick={()=>setOpenedMarker(expanded?null:marker.itemId)}
+     onKeyDown={event=>{if(expanded&&event.key==='Escape'){event.stopPropagation();setOpenedMarker(null);}}}>
+     <span>建议位置 · {marker.name}</span><ChevronDown aria-hidden="true" size={14}/>
+    </button>
+    {expanded&&<div id={regionId} className="advice-marker-card" role="region" aria-label={`${marker.name}的建议详情`}>
+     <dl><dt>理由</dt><dd>{marker.reason}</dd><dt>影响</dt><dd>{marker.impact}</dd></dl>
+    </div>}
+   </div>;
+  })}
+  {!props.blocked&&props.accessOverlay&&<div className="advice-access-legend" aria-label="模型估算图例">
+   {props.accessOverlay.routes.length>0&&<span className="access-route">门口至中央 · {Math.round(passageWidth*100)} 厘米通行检查</span>}
+   {props.accessOverlay.seating&&<span className="access-seating">入座检查区域</span>}
+   {props.accessOverlay.routes.length>0||props.accessOverlay.seating?<small>按户型估算</small>:null}
+  </div>}
+ </div>;
 }

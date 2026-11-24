@@ -1,15 +1,18 @@
 import {contextHouse,isRecord,placementBounds,type Advice,type LayoutContext} from './layoutAdvice';
 import {CATALOG,WALL_MATERIALS,corners,doorSweep,itemInsideRoom,makeItem,polygonOverlap,type Door,type House,type Item,type Kind,type Room} from './model';
 import {roomHeight} from './architecture';
+import {checkFurnitureAddition,isSeat} from './roomUsability';
 
 type WallMaterial=keyof typeof WALL_MATERIALS;
+type Rotation=0|90|180|270;
 type RoomEdit=
-  | {action:'addFurniture';roomId:string;furnitureKind:Kind;itemId:string;x:number;z:number;rotation:0|90}
+  | {action:'addFurniture';roomId:string;furnitureKind:Kind;itemId:string;x:number;z:number;rotation:Rotation}
   | {action:'wallMaterial';roomId:string;wallMaterial:WallMaterial};
 export type RoomEditAdvice={kind:'roomEdit';reply:string;edit:RoomEdit};
 type Point={x:number;z:number};
 const walls=['north','south','east','west'] as const;
 const wallNames={north:'北',south:'南',east:'东',west:'西'} as const;
+const facingRoom={north:0,south:180,east:270,west:90} as const;
 const materialNames=Object.values(WALL_MATERIALS).map(material=>material.name).join('、');
 const furnitureNames=Object.values(CATALOG).map(furniture=>furniture.name).join('、');
 const number=(value:unknown):value is number=>typeof value==='number'&&Number.isFinite(value);
@@ -24,7 +27,7 @@ export function readRoomEdit(value:unknown,roomId:string):RoomEdit|undefined {
   }
   if(value.action==='addFurniture'&&isKind(value.furnitureKind)&&typeof value.itemId==='string'
     &&/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(value.itemId)&&number(value.x)&&number(value.z)
-    &&(value.rotation===0||value.rotation===90)){
+    &&(value.rotation===0||value.rotation===90||value.rotation===180||value.rotation===270)){
     return {action:value.action,roomId,furnitureKind:value.furnitureKind,itemId:value.itemId,x:value.x,z:value.z,rotation:value.rotation};
   }
 }
@@ -57,6 +60,8 @@ export function applyRoomEdit(house:House,roomId:string,proposal:RoomEdit):{hous
   const item:Item={id:edit.itemId,roomId,kind:edit.furnitureKind,...CATALOG[edit.furnitureKind],
     x:edit.x,z:edit.z,rotation:edit.rotation,locked:false};
   if(!canPlace(house,room,item.kind)(item))return {error:'这个位置会越界、挡门或与家具重叠，请重新生成。'};
+  const accessIssue=checkFurnitureAddition(house,room)(item);
+  if(accessIssue)return {error:`这个位置${accessIssue}，请重新生成。`};
   return {house:{...house,items:[...house.items,item]}};
 }
 
@@ -71,8 +76,12 @@ function axisSamples(min:number,max:number,target:number){
 
 function findNewPlacement(house:House,room:Room,item:Item,target:Point,wall?:Door['wall'],window?:House['windows'][number]){
   const fits=canPlace(house,room,item.kind);
-  const candidates:{x:number;z:number;rotation:0|90;score:number}[]=[];
-  for(const rotation of (wall==='west'||wall==='east'?[90,0]:[0,90]) as (0|90)[]){
+  const checkAccess=checkFurnitureAddition(house,room);
+  const candidates:{x:number;z:number;rotation:Rotation;score:number}[]=[];
+  const rotations:Rotation[]=isSeat(item)
+    ?[...(wall?[facingRoom[wall]]:[]),0,90,180,270]
+    :wall==='west'||wall==='east'?[90,0]:[0,90];
+  for(const rotation of new Set(rotations)){
     const bounds=placementBounds(room,{...item,rotation});
     if(!bounds)continue;
     const {minX,maxX,minZ,maxZ}=bounds;
@@ -81,14 +90,22 @@ function findNewPlacement(house:House,room:Room,item:Item,target:Point,wall?:Doo
     for(const x of xs)for(const z of zs){
       if(window){
         const alongX=wall==='north'||wall==='south';
-        const extent=rotation===0?(alongX?item.w:item.d):(alongX?item.d:item.w);
+        const extent=rotation%180===0?(alongX?item.w:item.d):(alongX?item.d:item.w);
         if(Math.abs((alongX?x:z)-(alongX?target.x:target.z))>window.width/2+extent/2)continue;
       }
       candidates.push({x,z,rotation,score:(x-target.x)**2+(z-target.z)**2});
     }
   }
   candidates.sort((first,second)=>first.score-second.score);
-  return candidates.find(({x,z,rotation})=>fits({...item,x,z,rotation}));
+  let accessIssue:string|undefined;
+  for(const {x,z,rotation} of candidates){
+    const target={...item,x,z,rotation};
+    if(!fits(target))continue;
+    const issue=checkAccess(target);
+    if(!issue)return {placement:{x,z,rotation}};
+    accessIssue??=issue;
+  }
+  return {accessIssue};
 }
 
 export function makeRoomEditAdvice(context:LayoutContext,intent:Record<string,unknown>):Advice {
@@ -116,8 +133,8 @@ export function makeRoomEditAdvice(context:LayoutContext,intent:Record<string,un
   if(window){if(wall==='north'||wall==='south')target.x=room.x+window.offset;else target.z=room.z+window.offset;}
   const item=makeItem(furnitureKind,room.id,target.x,target.z);
   if(item.h>roomHeight(room))return text(`${item.name}高于当前房间的净高，无法添加。`);
-  const found=findNewPlacement(contextHouse(context),room,item,target,wall,window);
-  if(!found)return text(`在${wall?wallNames[wall]+'墙'+(window?'窗边':''):room.name}没有找到能放下${item.name}且不挡门的空位。`);
+  const {placement:found,accessIssue}=findNewPlacement(contextHouse(context),room,item,target,wall,window);
+  if(!found)return text(`在${wall?wallNames[wall]+'墙'+(window?'窗边':''):room.name}没有找到合适的位置放置${item.name}。${accessIssue?`候选位置${accessIssue}。`:'请检查家具占地和房门开启范围。'}`);
   const edit={action:'addFurniture',roomId:room.id,furnitureKind,itemId:item.id,x:found.x,z:found.z,rotation:found.rotation} as const;
   const where=window?`${wallNames[window.wall]}墙窗边`:wall?`${wallNames[wall]}墙边`:'当前房间的空位';
   return {kind:'roomEdit',reply:`建议在${where}添加${item.name}（${item.w} × ${item.d} 米）。现有家具保持原位，可以先在画布预览。`,edit};

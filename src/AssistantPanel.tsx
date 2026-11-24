@@ -1,14 +1,17 @@
-import {useEffect,useRef,useState} from 'react';
+import {useEffect,useImperativeHandle,useRef,useState,type Ref} from 'react';
 import {ChevronDown,ChevronUp,Send,Sparkles} from 'lucide-react';
-import {isMove,isRecord,itemLabel,layoutPreferences,makeLayoutContext,roomObjectives,type Advice,type AdviceDraft,type LayoutPreference,type MoveExplanation,type RoomObjective} from './layoutAdvice';
+import {inspectFurniturePlacement,isMove,isRecord,itemLabel,layoutPreferences,makeLayoutContext,roomObjectives,type Advice,type AdviceDraft,type LayoutPreference,type MoveExplanation,type RoomObjective} from './layoutAdvice';
 import {readRoomEdit,roomEditTitle} from './roomEdits';
 import type {House} from './model';
+import {roomReviewQuestion,type RoomViews} from './roomReview';
 
 type ChatMessage={role:'user'|'assistant';content:string};
-type ActiveAdvice={base:House; question:string; advice:Exclude<Advice,{kind:'text'}>; index:number};
+type ActiveAdvice={base:House; question:string; advice:Exclude<Advice,{kind:'text'}>; index:number; roomCheck?:boolean};
+export type AssistantTools={checkPosition:(itemId:string)=>void;checkLayout:(capture?:()=>RoomViews|undefined)=>void};
 type Props={
+  ref?:Ref<AssistantTools>;
   house:House; roomId:string; selected:string[]; collapsed:boolean; unavailable:boolean; previewDraft:AdviceDraft|null;
-  onToggle:()=>void; onFocus:(id:string)=>void; onPreview:(draft:AdviceDraft|null,base:House)=>boolean; onApply:(draft:AdviceDraft,base:House)=>boolean;
+  onToggle:()=>void; onFocus:(id:string)=>void; onPreview:(draft:AdviceDraft|null,base:House,explanation?:MoveExplanation)=>boolean; onApply:(draft:AdviceDraft,base:House)=>boolean;
 };
 
 function readExplanations(value:unknown,length:number):MoveExplanation[]|undefined {
@@ -36,7 +39,7 @@ function readAdvice(value:unknown,house:House,roomId:string):Advice | undefined 
       ||typeof objectiveLabel!=='string'||!Array.isArray(preserveIds)||!preserveIds.every(isItem))return;
     const explanations=readExplanations(value.explanations,changes.length);
     if(!explanations)return;
-    return {kind:'roomProposal',reply:value.reply,changes,objective:objective as RoomObjective,objectiveLabel,preserveIds,explanations};
+    return {kind:'roomProposal',reply:value.reply,reviewNote:typeof value.reviewNote==='string'?value.reviewNote:undefined,changes,objective:objective as RoomObjective,objectiveLabel,preserveIds,explanations};
   }
   if(value.kind==='clarify') {
     if(!Array.isArray(value.candidateIds) || value.candidateIds.length<2 || !value.candidateIds.every(isItem)) return;
@@ -55,11 +58,12 @@ function messageText(content:string) {
     ? <b key={index}>{part.slice(2,-2)}</b> : part);
 }
 
-export default function AssistantPanel({house,roomId,selected,collapsed,unavailable,previewDraft,onToggle,onFocus,onPreview,onApply}:Props){
+export default function AssistantPanel({ref,house,roomId,selected,collapsed,unavailable,previewDraft,onToggle,onFocus,onPreview,onApply}:Props){
   const [text,setText]=useState('');
   const [messages,setMessages]=useState<ChatMessage[]>([]);
   const [pending,setPending]=useState('');
   const [error,setError]=useState('');
+  const [reviewStatus,setReviewStatus]=useState('');
   const [preference,setPreference]=useState<LayoutPreference>('balanced');
   const [custom,setCustom]=useState('');
   const [active,setActive]=useState<ActiveAdvice|null>(null);
@@ -68,32 +72,48 @@ export default function AssistantPanel({house,roomId,selected,collapsed,unavaila
   const items=house.items.filter(item=>item.roomId===roomId);
 
   useEffect(()=>()=>requestRef.current?.abort(),[]);
+  useImperativeHandle(ref,()=>({checkPosition(itemId){
+    if(unavailable||requestRef.current)return;
+    const result=inspectFurniturePlacement(house,roomId,itemId);
+    if(!result)return;
+    setError('');
+    setReviewStatus('');
+    setMessages(previous=>[...previous,{role:'user',content:`检查${result.name}的当前位置。`},{role:'assistant',content:result.reply}]);
+    if(collapsed)onToggle();
+  },checkLayout(capture){
+    if(unavailable||requestRef.current)return;
+    let views:RoomViews|undefined;
+    if(capture){try{views=capture();}catch{/* The request can still use room data. */}}
+    setReviewStatus(views?'本次检查附上 2D 与 3D 房间视图。':capture?'房间视图未能生成，本次使用布局数据。':'本次检查使用布局数据。');
+    void send(roomReviewQuestion,undefined,{views});
+  }}));
   useEffect(()=>{
     const log=logRef.current;
     if(log?.lastElementChild) log.scrollTop=Math.max(0,(log.lastElementChild as HTMLElement).offsetTop-8);
   },[messages,pending,collapsed]);
 
-  async function send(content=text.trim(),confirmedId?:string){
+  async function send(content=text.trim(),confirmedId?:string,review?:{views?:RoomViews}){
     if(!content || requestRef.current) return;
     const controller=new AbortController();
     requestRef.current=controller;
-    const requestMessages:ChatMessage[]=[...messages.slice(-18),{role:'user',content}];
+    const requestMessages:ChatMessage[]=[...(review?[]:messages.slice(-18)),{role:'user',content}];
     const timeout=AbortSignal.timeout(32_000);
     const prior=active?.base===house?active:undefined;
     const priorMove=prior?.advice.kind==='proposal'?prior.advice.moves[prior.index]:undefined;
     const previousRoom=prior?.advice.kind==='roomProposal'?prior.advice:undefined;
     const layout=makeLayoutContext(house,roomId,selected,preference,custom.trim(),confirmedId,
-      priorMove?{move:priorMove,state:previewDraft===priorMove?'previewing':'suggested'}:undefined,
-      previousRoom?{objective:previousRoom.objective,changes:previousRoom.changes,preserveIds:previousRoom.preserveIds}:undefined);
+      !review&&priorMove?{move:priorMove,state:previewDraft===priorMove?'previewing':'suggested'}:undefined,
+      !review&&previousRoom?{objective:previousRoom.objective,changes:previousRoom.changes,preserveIds:previousRoom.preserveIds}:undefined);
     onPreview(null,house);
     setActive(null);
-    setText('');
+    if(!review){setText('');setReviewStatus('');}
     setError('');
     setPending(content);
     if(collapsed) onToggle();
     try {
       const response=await fetch('/api/ai/chat',{
-        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:requestMessages,layout}),
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:requestMessages,layout,
+          ...(review?{checkLayout:true,roomViews:review.views}:{})}),
         signal:AbortSignal.any([controller.signal,timeout]),
       });
       const result:unknown=await response.json().catch(()=>null);
@@ -104,9 +124,10 @@ export default function AssistantPanel({house,roomId,selected,collapsed,unavaila
         const advice=readAdvice(result,house,roomId);
         if(advice) {
           const historyReply=advice.kind==='proposal'
-            ? `建议移动${itemLabel(items,advice.moves[0].itemId)}。${advice.reply}` : advice.reply;
+            ? `建议移动${itemLabel(items,advice.moves[0].itemId)}。${advice.reply}`
+            : advice.kind==='roomProposal'&&advice.reviewNote?`${advice.reviewNote}\n\n${advice.reply}`:advice.reply;
           setMessages(previous=>[...previous,{role:'user',content},{role:'assistant',content:historyReply}]);
-          if(advice.kind!=='text') setActive({base:house,question:content,advice,index:0});
+          if(advice.kind!=='text') setActive({base:house,question:content,advice,index:0,roomCheck:!!review});
           else if(advice.keepSuggestion&&prior) setActive(prior);
           return;
         }
@@ -120,7 +141,7 @@ export default function AssistantPanel({house,roomId,selected,collapsed,unavaila
       if(!controller.signal.aborted) setPending('');
     }
     if(prior)setActive(prior);
-    setText(draft=>draft||content);
+    if(!review)setText(draft=>draft||content);
   }
 
   const stale=!!active && active.base!==house;
@@ -146,6 +167,7 @@ export default function AssistantPanel({house,roomId,selected,collapsed,unavaila
         {collapsed?<ChevronUp size={18}/>:<ChevronDown size={18}/>}</button>
     </div>
     {!collapsed&&<>
+      {reviewStatus&&<small className="assistant-review-status" role="status">{reviewStatus}</small>}
       <div className="assistant-preferences">
         <label>布局偏好 <select aria-label="布局偏好" value={preference} disabled={!!pending} onChange={event=>preferenceChanged(event.target.value as LayoutPreference)}>
           {Object.entries(layoutPreferences).map(([value,label])=><option key={value} value={value}>{label}</option>)}
@@ -165,7 +187,7 @@ export default function AssistantPanel({house,roomId,selected,collapsed,unavaila
       {active&&<div className={`assistant-result${!stale&&(move||roomPlan||roomEdit)?' assistant-result--proposal':''}`} role="region" aria-label="布局建议">
         {stale?<>
           <p>布局已变化，请按当前房间重新生成建议。</p>
-          <div className="assistant-actions"><button type="button" onClick={()=>void send(active.question)}>重新生成</button><button type="button" onClick={ignore}>关闭</button></div>
+          <div className="assistant-actions">{!active.roomCheck&&<button type="button" onClick={()=>void send(active.question)}>重新生成</button>}<button type="button" onClick={ignore}>关闭</button></div>
         </>:roomEdit?<>
           <div className="assistant-result-title"><strong>{room.name} · {roomEditTitle(roomEdit.edit)}</strong></div>
           <div className="assistant-actions">
@@ -207,7 +229,7 @@ export default function AssistantPanel({house,roomId,selected,collapsed,unavaila
           </dl>
           <div className="assistant-actions">
             <button type="button" className="assistant-primary" disabled={unavailable} onClick={()=>{
-              if(!previewing){onPreview(move,active.base);return;}
+              if(!previewing){onPreview(move,active.base,explanation);return;}
               if(onApply(move,active.base))setActive(null);
             }}>{previewing?'应用建议':'预览建议'}</button>
             {previewing&&<button type="button" onClick={()=>onPreview(null,house)}>取消预览</button>}
