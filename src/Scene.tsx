@@ -15,6 +15,7 @@ import {itemLabel,type Move} from './layoutAdvice';
 import {passageWidth} from './roomUsability';
 import {captureRoomPlan,encodeRoomView,viewHeight,viewWidth} from './roomViews';
 import type {RoomViews} from './roomReview';
+import {useI18n} from './i18n';
 
 export type AdviceMarker={itemId:string;name:string;reason:string;impact:string};
 export type AccessOverlay={routes:[number,number][][];seating?:[number,number][]};
@@ -31,6 +32,9 @@ function label(parent:T.Object3D,text:string,x:number,y:number,z:number,color='#
 }
 export default function Scene(props:Props){
  const host=useRef<HTMLDivElement>(null),latest=useRef(props),engine=useRef<Engine|null>(null);latest.current=props;
+ const i18n=useI18n(),locale=useRef(i18n);
+ locale.current=i18n;
+ const {language,t,tx}=i18n;
  const clickedItemId=useRef<string|undefined>(undefined);
  const markerNodes=useRef(new Map<string,HTMLDivElement>());
  const [openedMarker,setOpenedMarker]=useState<string|null>(null);
@@ -40,7 +44,7 @@ export default function Scene(props:Props){
  useEffect(()=>{
   const el=host.current!;let renderer:T.WebGLRenderer;
   try{renderer=new T.WebGLRenderer({antialias:true,alpha:true});}catch{setError('3D 未能启动，请使用开启硬件加速的 Chrome 或 Edge。');return;}
-  renderer.setPixelRatio(Math.min(devicePixelRatio,1.75));renderer.shadowMap.enabled=!props.mini;renderer.shadowMap.type=T.PCFSoftShadowMap;renderer.outputColorSpace=T.SRGBColorSpace;renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;renderer.setClearColor('#e7e6e1',1);renderer.domElement.setAttribute('aria-label',props.mini?'全屋三维地图':'房间编辑画布');renderer.domElement.style.touchAction='none';el.appendChild(renderer.domElement);
+  renderer.setPixelRatio(Math.min(devicePixelRatio,1.75));renderer.shadowMap.enabled=!props.mini;renderer.shadowMap.type=T.PCFSoftShadowMap;renderer.outputColorSpace=T.SRGBColorSpace;renderer.toneMapping=T.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;renderer.setClearColor('#e7e6e1',1);renderer.domElement.style.touchAction='none';el.appendChild(renderer.domElement);
   const scene=new T.Scene();let disposed=false;const facades:{group:T.Group;r:Room;wall:Wall}[]=[];const root=new T.Group(),annotation=new T.Group(),viewRoot=new T.Group(),measureRoot=new T.Group();scene.add(root,annotation,viewRoot,measureRoot);
   const environment=new RoomEnvironment();const pmrem=new T.PMREMGenerator(renderer);const envTarget=pmrem.fromScene(environment,.04);scene.environment=envTarget.texture;scene.environmentIntensity=.65;environment.dispose();pmrem.dispose();
   scene.add(new T.HemisphereLight('#edf3ff','#9c9082',1));const sun=new T.DirectionalLight('#fff5e5',2.5);sun.position.set(-3,8,-5);sun.castShadow=!props.mini;sun.shadow.mapSize.set(2048,2048);sun.shadow.camera.left=-12;sun.shadow.camera.right=12;sun.shadow.camera.top=12;sun.shadow.camera.bottom=-12;sun.shadow.normalBias=.045;sun.shadow.bias=-.0001;scene.add(sun);
@@ -97,6 +101,8 @@ export default function Scene(props:Props){
   function outlineView(){clear(viewRoot);const p=latest.current;if(!p.mini||!p.view?.length)return;const outline=line(viewRoot,[...p.view,p.view[0]].map(([x,z])=>new T.Vector3(x,.12,z)),'#557d5f',true);(outline.material as T.LineDashedMaterial).depthTest=false;outline.renderOrder=50;}
   function rebuild(snapshot?:Props){
    targets.clear();const p=snapshot??latest.current;if(drag)return;clear(root);clear(annotation);objects.clear();outlines.clear();facades.length=0;
+   const {t,tx}=locale.current;
+   renderer.domElement.setAttribute('aria-label',p.mini?tx('全屋三维地图','3D home map'):tx('房间编辑画布','Room editor canvas'));
    const renderHouse=!p.mini&&!p.realistic&&p.advicePreview&&p.draft?p.draft:p.house;
    const rooms=p.mini?renderHouse.rooms:renderHouse.rooms.filter(r=>r.id===p.roomId);const warn=warnings(renderHouse);
    const previewIds=new Set(p.advicePreview?.map(move=>move.itemId));
@@ -119,7 +125,7 @@ export default function Scene(props:Props){
      for(const edge of edges)if(edge.b>edge.a){const middle=(edge.a+edge.b)/2;box(root,alongX?edge.b-edge.a:.025,.085,alongX?.025:edge.b-edge.a,'#d2cdc2',alongX?r.x+middle:fixed,.043,alongX?fixed:r.z+middle,.002);}
     }
     if(!p.mini){if(p.grid&&!p.realistic&&(p.selected.length||p.tool!=='select')){const grid=new T.GridHelper(1,10,'#a6aaa1','#c0c2ba');grid.scale.set(r.w,1,r.d);grid.position.set(r.x,.014,r.z);root.add(grid);}if(p.measure&&!p.realistic)dimensions(r);}
-    else label(annotation,r.name,r.x,.2,r.z,'#57674f',.95);
+    else label(annotation,t(r.name),r.x,.2,r.z,'#57674f',.95);
    }
    for(const f of renderHouse.items.filter(f=>rooms.some(r=>r.id===f.roomId))){
     const previewAddition=renderHouse!==p.house&&!p.house.items.some(item=>item.id===f.id);
@@ -127,7 +133,7 @@ export default function Scene(props:Props){
     const color=warn[f.id]?'#cc7457':previewAddition?'#167755':p.selected.includes(f.id)?'#376653':f.locked?'#ab9371':'#a0b296';
     const height=f.kind==='desk'?f.h+.45:f.kind==='bed'?1:f.h+.16;
     const edge=new T.LineSegments(new T.EdgesGeometry(new T.BoxGeometry(f.w+.09,height,f.d+.09)),new T.LineDashedMaterial({color,dashSize:.11,gapSize:.065,depthTest:false,transparent:true,opacity:.9}));edge.computeLineDistances();edge.position.y=height/2;edge.renderOrder=20;g.add(edge);edge.visible=!p.mini&&!p.realistic&&(previewAddition||p.selected.includes(f.id)||!!warn[f.id]||f.locked);outlines.set(f.id,edge);
-    if(!p.mini&&!p.realistic&&p.selected.includes(f.id)&&!previewIds.has(f.id)){label(annotation,`${itemLabel(renderHouse.items.filter(item=>item.roomId===p.roomId),f.id)}${f.locked?' · 已锁定':''}  ${f.w} × ${f.d} m`,f.x,f.h+.4,f.z,'#376653');}
+    if(!p.mini&&!p.realistic&&p.selected.includes(f.id)&&!previewIds.has(f.id)){label(annotation,`${t(itemLabel(renderHouse.items.filter(item=>item.roomId===p.roomId),f.id))}${f.locked?' · '+tx('已锁定','Locked'):''}  ${f.w} × ${f.d} m`,f.x,f.h+.4,f.z,'#376653');}
    }
    for(const d of renderHouse.doors.filter(d=>rooms.some(r=>r.id===d.roomId))){
     const r=roomOf(renderHouse,d.roomId),f=doorFrame(renderHouse,d),g=new T.Group();g.userData.id=d.id;root.add(g);
@@ -143,7 +149,7 @@ export default function Scene(props:Props){
      box(g,alongX?d.width+.09:.16,.065,alongX?.16:d.width+.09,'#ded9cf',f.x,h+.03,f.z,.003);
     }
     if(!p.realistic){const arc=doorSweep(renderHouse,d).slice(1).map(([x,z])=>new T.Vector3(x,.035,z));line(g,arc,warn[d.id]?'#ad6754':'#a3947e',true);}
-    if(p.selected.includes(d.id)&&!p.mini&&!p.realistic)label(annotation,`房门 · ${d.width} × ${doorHeight(d)} m`,f.x,h+.25,f.z);
+    if(p.selected.includes(d.id)&&!p.mini&&!p.realistic)label(annotation,`${tx('房门','Door')} · ${d.width} × ${doorHeight(d)} m`,f.x,h+.25,f.z);
    }
    for(const w of renderHouse.windows.filter(w=>rooms.some(r=>r.id===w.roomId))){
     const r=roomOf(renderHouse,w.roomId),alongX=w.wall==='north'||w.wall==='south',x=alongX?r.x+w.offset:r.x+(w.wall==='west'?-r.w/2:r.w/2),z=alongX?r.z+(w.wall==='north'?-r.d/2:r.d/2):r.z+w.offset;
@@ -155,7 +161,7 @@ export default function Scene(props:Props){
     for(const sign of [-1,1])box(g,alongX?w.width+.08:.14,.045,alongX?.14:w.width+.08,color,x,y+sign*h/2,z,.002);
     for(const sign of [-1,0,1])box(g,alongX?.035:.12,h,alongX?.12:.035,color,x+(alongX?sign*w.width/2:0),y,z+(alongX?0:sign*w.width/2),.002);
     if(!flat)box(g,alongX?w.width+.16:.24,.04,alongX?.24:w.width+.16,'#d4d1c7',x,windowSill(w)-.025,z,.003);
-    if(p.selected.includes(w.id)&&!p.mini&&!p.realistic)label(annotation,`窗户 · ${w.width} × ${windowHeight(w)} m`,x,y+h/2+.2,z,'#397c78');
+    if(p.selected.includes(w.id)&&!p.mini&&!p.realistic)label(annotation,`${tx('窗户','Window')} · ${w.width} × ${windowHeight(w)} m`,x,y+h/2+.2,z,'#397c78');
    }
    if(snapshot)return;
    if(p.reviewIssueId&&!p.mini&&!p.realistic){
@@ -193,9 +199,9 @@ export default function Scene(props:Props){
      (connector.material as T.LineBasicMaterial).depthTest=false;connector.renderOrder=24;
      objects.get(item.id)?.position.set(move.x,0,move.z);
      const edge=outlines.get(item.id);if(edge){edge.visible=true;(edge.material as T.LineBasicMaterial).color.set('#167755');}
-     const name=itemLabel(p.house.items.filter(value=>value.roomId===p.roomId),item.id);
-     label(annotation,p.advicePreview.length===1?'原位置':`原位置 · ${name}`,item.x,.2,item.z,'#955223',.85).material.toneMapped=false;
-     if(!p.adviceMarkers?.some(marker=>marker.itemId===item.id))label(annotation,`建议位置 · ${name}`,move.x,item.h+.4,move.z,'#116043').material.toneMapped=false;
+     const name=t(itemLabel(p.house.items.filter(value=>value.roomId===p.roomId),item.id)),original=tx('原位置','Original position');
+     label(annotation,p.advicePreview.length===1?original:`${original} · ${name}`,item.x,.2,item.z,'#955223',.85).material.toneMapped=false;
+     if(!p.adviceMarkers?.some(marker=>marker.itemId===item.id))label(annotation,`${tx('建议位置','Suggested position')} · ${name}`,move.x,item.h+.4,move.z,'#116043').material.toneMapped=false;
     }
    }
   }
@@ -233,7 +239,7 @@ export default function Scene(props:Props){
     drag.blocked=Math.abs(moved.x-snap(anchor.x+v.x-drag.point.x,p.grid))>1e-6||Math.abs(moved.z-snap(anchor.z+v.z-drag.point.z,p.grid))>1e-6;
     p.onMessage(result.valid&&drag.blocked?'已到墙边，松手放置或沿墙移动。':result.message);drawPreview(result.house,result.yieldId);p.onPreview?.(result.house);
    }
-   else{const bounds=el.getBoundingClientRect(),warn=warnings(p.house);rect.hidden=false;const left=Math.min(e.clientX,drag.startX)-bounds.left,top=Math.min(e.clientY,drag.startY)-bounds.top;Object.assign(rect.style,{left:left+'px',top:top+'px',width:Math.abs(dx)+'px',height:Math.abs(dy)+'px'});let count=0;for(const f of p.house.items.filter(f=>f.roomId===p.roomId)){const v=project(f.x,f.h/2,f.z),inside=!f.locked&&v.x>=left&&v.x<=left+Math.abs(dx)&&v.y>=top&&v.y<=top+Math.abs(dy);if(inside)count++;const edge=outlines.get(f.id);if(edge)edge.visible=inside||p.selected.includes(f.id)||f.locked||!!warn[f.id];}rect.dataset.count=`${count} 件家具`;}
+   else{const bounds=el.getBoundingClientRect(),warn=warnings(p.house);rect.hidden=false;const left=Math.min(e.clientX,drag.startX)-bounds.left,top=Math.min(e.clientY,drag.startY)-bounds.top;Object.assign(rect.style,{left:left+'px',top:top+'px',width:Math.abs(dx)+'px',height:Math.abs(dy)+'px'});let count=0;for(const f of p.house.items.filter(f=>f.roomId===p.roomId)){const v=project(f.x,f.h/2,f.z),inside=!f.locked&&v.x>=left&&v.x<=left+Math.abs(dx)&&v.y>=top&&v.y<=top+Math.abs(dy);if(inside)count++;const edge=outlines.get(f.id);if(edge)edge.visible=inside||p.selected.includes(f.id)||f.locked||!!warn[f.id];}rect.dataset.count=locale.current.tx(`${count} 件家具`,`${count} ${count===1?'item':'items'}`);}
   }
   function finish(cancel=false,e?:PointerEvent){
    if(!drag)return;const d=drag;drag=null;rect.hidden=true;controls.enabled=true;const p=latest.current;if(!p.mini){p.onPreview?.(null);p.onBusy?.(false);}
@@ -344,14 +350,14 @@ export default function Scene(props:Props){
  useEffect(()=>{
   if(props.selected.length!==1||props.selected[0]!==clickedItemId.current||!props.house.items.some(item=>item.id===clickedItemId.current&&item.roomId===props.roomId))clickedItemId.current=undefined;
   engine.current?.rebuild();
- },[props.house,props.roomId,props.mode,props.mini?null:props.selected,props.mini?false:props.grid,props.mini?false:props.measure,props.realistic,props.advicePreview,props.advicePreview?props.draft:null,props.adviceMarkers,props.accessOverlay,props.reviewIssueId]);
+ },[props.house,props.roomId,props.mode,props.mini?null:props.selected,props.mini?false:props.grid,props.mini?false:props.measure,props.realistic,props.advicePreview,props.advicePreview?props.draft:null,props.adviceMarkers,props.accessOverlay,props.reviewIssueId,language]);
  useEffect(()=>{engine.current?.reset();},[props.resetKey]);
  useEffect(()=>{engine.current?.reframe();},[props.insets]);
  useEffect(()=>{engine.current?.outlineView();},[props.view]);
  useEffect(()=>{if(props.mini)engine.current?.preview(props.draft??props.house);},[props.draft,props.house,props.mini]);
  return <div className={'scene-host '+(props.mini?'mini-scene':'')} data-models={modelStatus} ref={host}>
-  {!props.mini&&modelStatus!=='ready'&&<div className="model-loading">{modelStatus==='loading'?'正在载入真实家具模型…':'部分模型未能载入，暂用替代形状。'}</div>}
-  {error&&<div className="canvas-error" role="alert">{error}</div>}
+  {!props.mini&&modelStatus!=='ready'&&<div className="model-loading">{modelStatus==='loading'?tx('正在载入真实家具模型…','Loading furniture models…'):tx('部分模型未能载入，暂用替代形状。','Some models could not load. Placeholder shapes are shown.')}</div>}
+  {error&&<div className="canvas-error" role="alert">{tx(error,'3D could not start. Try Chrome or Edge with hardware acceleration enabled.')}</div>}
   {!props.blocked&&!props.realistic&&props.adviceMarkers?.map(marker=>{
    const expanded=openedMarker===marker.itemId;
    const regionId=`advice-marker-${marker.itemId}`;
@@ -361,17 +367,17 @@ export default function Scene(props:Props){
     <button type="button" className="advice-marker-trigger" aria-expanded={expanded} aria-controls={expanded?regionId:undefined}
      onClick={()=>setOpenedMarker(expanded?null:marker.itemId)}
      onKeyDown={event=>{if(expanded&&event.key==='Escape'){event.stopPropagation();setOpenedMarker(null);}}}>
-     <span>建议位置 · {marker.name}</span><ChevronDown aria-hidden="true" size={14}/>
+     <span>{tx('建议位置','Suggested position')} · {t(marker.name)}</span><ChevronDown aria-hidden="true" size={14}/>
     </button>
-    {expanded&&<div id={regionId} className="advice-marker-card" role="region" aria-label={`${marker.name}的建议详情`}>
-     <dl><dt>理由</dt><dd>{marker.reason}</dd><dt>影响</dt><dd>{marker.impact}</dd></dl>
+    {expanded&&<div id={regionId} className="advice-marker-card" role="region" aria-label={tx(`${marker.name}的建议详情`,`Suggestion details for ${t(marker.name)}`)}>
+     <dl><dt>{tx('理由','Reason')}</dt><dd>{t(marker.reason)}</dd><dt>{tx('影响','Impact')}</dt><dd>{t(marker.impact)}</dd></dl>
     </div>}
    </div>;
   })}
-  {!props.blocked&&props.accessOverlay&&<div className="advice-access-legend" aria-label="模型估算图例">
-   {props.accessOverlay.routes.length>0&&<span className="access-route">门口至中央 · {Math.round(passageWidth*100)} 厘米通行检查</span>}
-   {props.accessOverlay.seating&&<span className="access-seating">入座检查区域</span>}
-   {props.accessOverlay.routes.length>0||props.accessOverlay.seating?<small>按户型估算</small>:null}
+  {!props.blocked&&props.accessOverlay&&<div className="advice-access-legend" aria-label={tx('模型估算图例','Model estimate legend')}>
+   {props.accessOverlay.routes.length>0&&<span className="access-route">{tx(`门口至中央 · ${Math.round(passageWidth*100)} 厘米通行检查`,`Entry to center · ${Math.round(passageWidth*100)} cm clearance check`)}</span>}
+   {props.accessOverlay.seating&&<span className="access-seating">{tx('入座检查区域','Seating clearance area')}</span>}
+   {props.accessOverlay.routes.length>0||props.accessOverlay.seating?<small>{tx('按户型估算','Estimated from the layout model')}</small>:null}
   </div>}
  </div>;
 }

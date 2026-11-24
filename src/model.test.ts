@@ -15,6 +15,7 @@ import {accessPreview,assessRoomUse,frontClearance,sofaClearance} from './roomUs
 import {applyRoomEdit,readRoomEdit} from './roomEdits';
 import {reviewRoom} from './roomReview';
 import {readReviewNote,readRoomViews} from '../server/chat';
+import {toEnglish} from './english';
 
 test('AI 布局点评保留家具编号，把测量数值留给程序',()=>{
  const review={keep:'保留沙发 F1。',priority:'检查两把椅子前方。',tradeoff:'方案使入座更方便。'};
@@ -24,6 +25,10 @@ test('AI 布局点评保留家具编号，把测量数值留给程序',()=>{
  const visual=JSON.stringify({...review,keep:'图中显示沙发与墙面明暗相衬。'});
  assert.equal(readReviewNote(visual),undefined);
  assert.match(readReviewNote(visual,true)??'',/明暗相衬/);
+ const english={keep:'Keep sofa F1.',priority:'Inspect the entry.',tradeoff:'The cabinet moves away from the doorway.'};
+ assert.match(readReviewNote(JSON.stringify(english),false,'en')??'',/^Worth keeping · Keep sofa F1/);
+ assert.equal(readReviewNote(JSON.stringify({...english,tradeoff:'It frees 70 centimeters.'}),true,'en'),undefined);
+ assert.equal(readReviewNote(JSON.stringify({...english,keep:'As shown in the screenshot, keep F1.'}),false,'en'),undefined);
 });
 
 test('布局检查只报告当前房间，并能区分门扇冲突和门后的通路问题',()=>{
@@ -44,6 +49,7 @@ test('布局检查只报告当前房间，并能区分门扇冲突和门后的�
  assert.deepEqual(review.passages,[{doorId:door.id,reachable:false}]);
  assert.deepEqual(review.issues.map(issue=>issue.id),[door.id]);
  assert.match(review.issues[0].message,/未检出约 60 厘米宽的通路/);
+ assert.match(toEnglish(review.issues[0].message),/No path about 60 cm wide was found/);
  assert.deepEqual(house,before);
 });
 

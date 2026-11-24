@@ -2,7 +2,7 @@
 
 **An interactive 2D/3D room-layout editor built with React, TypeScript, and Three.js.**
 
-SpaceMate is an ISA401 Human–AI Interaction coursework prototype for arranging furniture, exploring floor plans, and testing spatial editing interactions. The space assistant uses DeepSeek to interpret requests about the current room and proposes moves users can preview and apply. The current application interface is in Chinese.
+SpaceMate is an ISA401 Human–AI Interaction coursework prototype for arranging furniture, exploring floor plans, and testing spatial editing interactions. The space assistant uses DeepSeek to interpret requests about the current room and proposes moves users can preview and apply. Use the 中文 / English menu in the top bar to switch languages. The browser remembers your choice, and new assistant replies follow it.
 
 ## Getting Started
 
